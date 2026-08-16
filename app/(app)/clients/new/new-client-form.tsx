@@ -1,0 +1,92 @@
+"use client";
+
+import { useRef } from "react";
+import { useJsonPost } from "@/lib/use-json-post";
+
+const inputClass =
+  "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
+const labelClass = "block text-sm font-medium text-slate-700";
+
+export function NewClientForm() {
+  const formRef = useRef<HTMLFormElement>(null);
+  const { submit, error, pending } = useJsonPost<Record<string, string>>(
+    "/api/clients",
+    (data) => `/clients/${data.id}`
+  );
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    submit(Object.fromEntries(formData) as Record<string, string>);
+  }
+
+  return (
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-5 rounded-lg border border-slate-200 bg-white p-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label className={labelClass} htmlFor="registeredName">Registered Name</label>
+          <input id="registeredName" name="registeredName" required className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="tradeName">Trade Name (optional)</label>
+          <input id="tradeName" name="tradeName" className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="tin">TIN</label>
+          <input id="tin" name="tin" placeholder="000-000-000-00000" required className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="rdoCode">RDO Code</label>
+          <input id="rdoCode" name="rdoCode" required className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="taxpayerType">Taxpayer Type</label>
+          <select id="taxpayerType" name="taxpayerType" required className={inputClass} defaultValue="corporation">
+            <option value="individual">Individual</option>
+            <option value="corporation">Corporation</option>
+            <option value="partnership">Partnership</option>
+            <option value="sole_prop">Sole Proprietorship</option>
+            <option value="professional">Professional</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="vatStatus">VAT Status</label>
+          <select id="vatStatus" name="vatStatus" required className={inputClass} defaultValue="vat">
+            <option value="vat">VAT-Registered</option>
+            <option value="non_vat">Non-VAT (Percentage Tax)</option>
+            <option value="vat_exempt">VAT-Exempt</option>
+          </select>
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelClass} htmlFor="incomeTaxRegime">Income Tax Regime</label>
+          <select id="incomeTaxRegime" name="incomeTaxRegime" required className={inputClass} defaultValue="rcit">
+            <option value="graduated_itemized">Graduated Rates — Itemized Deductions</option>
+            <option value="graduated_osd">Graduated Rates — Optional Standard Deduction</option>
+            <option value="eight_percent">8% Flat Rate on Gross Sales/Receipts</option>
+            <option value="rcit">Regular Corporate Income Tax (RCIT)</option>
+            <option value="mcit_applicable">Minimum Corporate Income Tax (MCIT) Applicable</option>
+          </select>
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelClass} htmlFor="address">Registered Address</label>
+          <input id="address" name="address" required className={inputClass} />
+        </div>
+      </div>
+
+      <p className="text-xs text-slate-500">
+        The full onboarding wizard (books type, PTU details, withholding-agent flags, opening balance import) is
+        deferred to a later phase — see DECISIONS.md. This creates the client and seeds the standard PH SME chart
+        of accounts.
+      </p>
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <button
+        type="submit"
+        disabled={pending}
+        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+      >
+        {pending ? "Creating..." : "Create Client"}
+      </button>
+    </form>
+  );
+}
