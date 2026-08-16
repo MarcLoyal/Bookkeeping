@@ -1,0 +1,49 @@
+{
+  "name": "keepbooks",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx db/migrate.ts",
+    "seed": "tsx db/seed.ts",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.20.5",
+    "bcryptjs": "^2.4.3",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.36.4",
+    "jose": "^5.9.6",
+    "lucide-react": "^0.468.0",
+    "next": "16.3.1",
+    "postgres": "^3.4.5",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^2.5.5",
+    "xlsx": "^0.18.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.28.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.1",
+    "playwright": "^1.49.1",
+    "tailwindcss": "^4",
+    "tsx": "^4.19.2",
+    "typescript": "^5",
+    "vitest": "^2.1.8"
+  }
+}
