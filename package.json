@@ -10,8 +10,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx db/migrate.ts",
     "seed": "tsx db/seed.ts",
-    "test": "vitest run",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.20.5",

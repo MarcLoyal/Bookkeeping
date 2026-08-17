@@ -44,4 +44,3 @@ scratch-*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-app/favicon.ico
