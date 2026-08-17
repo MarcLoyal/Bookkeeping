@@ -100,10 +100,11 @@ export function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
 }
 
 /**
- * Applies a rate expressed as an exact fraction (e.g. tax_rules value 0.12 ->
- * rateNumerator=12n, rateDenominator=100n) to a centavos amount, rounding
- * half-up once. Never hardcode a decimal rate literal directly against
- * centavos — go through tax_rules and this function.
+ * Applies a rate expressed as an exact fraction (numerator/denominator, as
+ * stored in tax_rules — e.g. a standard-VAT-style rate is numerator 12,
+ * denominator 100) to a centavos amount, rounding half-up once. Never
+ * hardcode a decimal rate literal directly against centavos — go through
+ * tax_rules and this function.
  */
 export function applyRate(amount: Centavos, rateNumerator: bigint, rateDenominator: bigint): Centavos {
   return roundHalfUp(amount * rateNumerator, rateDenominator);
