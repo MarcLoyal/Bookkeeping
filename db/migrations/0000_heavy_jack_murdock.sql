@@ -520,7 +520,6 @@ CREATE INDEX IF NOT EXISTS "cash_receipts_client_id_idx" ON "cash_receipts" USIN
 CREATE INDEX IF NOT EXISTS "cash_receipts_client_date_idx" ON "cash_receipts" USING btree ("client_id","receipt_date");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "purchases_client_id_idx" ON "purchases" USING btree ("client_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "purchases_client_date_idx" ON "purchases" USING btree ("client_id","invoice_date");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "purchases_contact_id_idx" ON "purchases" USING btree ("contact_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "sales_invoices_client_id_idx" ON "sales_invoices" USING btree ("client_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "sales_invoices_client_date_idx" ON "sales_invoices" USING btree ("client_id","invoice_date");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "sales_invoices_contact_id_idx" ON "sales_invoices" USING btree ("contact_id");--> statement-breakpoint
