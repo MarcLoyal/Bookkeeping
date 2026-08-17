@@ -15,11 +15,8 @@ export function NewClientForm() {
   );
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    console.log("[CLIENT-DEBUG] handleSubmit fired");
     e.preventDefault();
-    e.stopPropagation();
     const formData = new FormData(e.currentTarget);
-    console.log("[CLIENT-DEBUG] formData", Object.fromEntries(formData));
     submit(Object.fromEntries(formData) as Record<string, string>);
   }
 
