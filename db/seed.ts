@@ -202,6 +202,7 @@ async function seedTaxRules() {
     { key: "ewt_rentals_rate", value: "0.05", effectiveFrom: asOf, notes: "ATC WC100 — rentals of real/personal property." },
     { key: "ewt_goods_rate", value: "0.01", effectiveFrom: asOf, notes: "ATC WC160 — goods, top withholding agents." },
     { key: "ewt_services_rate", value: "0.02", effectiveFrom: asOf, notes: "ATC WC157 — services, top withholding agents." },
+    { key: "eight_percent_rate", value: "0.08", effectiveFrom: asOf, notes: "8% income tax option rate (RA 10963/TRAIN), in lieu of percentage tax + graduated income tax." },
     { key: "eight_percent_threshold_annual", value: "250000.00", effectiveFrom: asOf, notes: "First P250,000 of gross sales/receipts exempt under the 8% option." },
     { key: "vat_registration_threshold_annual", value: "3000000.00", effectiveFrom: asOf, notes: "Mandatory VAT registration threshold." },
   ]);

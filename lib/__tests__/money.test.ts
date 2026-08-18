@@ -4,6 +4,7 @@ import {
   applyRate,
   centavos,
   formatCentavos,
+  parseRateFraction,
   pesosToCentavos,
   roundHalfUp,
   sumCentavos,
@@ -79,6 +80,24 @@ describe("applyRate", () => {
     const amount = pesosToCentavos("100.05");
     const vat = applyRate(amount, 12n, 100n);
     expect(vat).toBe(1201n);
+  });
+});
+
+describe("parseRateFraction", () => {
+  it("parses a tax_rules-style decimal into an exact fraction, never a float", () => {
+    expect(parseRateFraction("0.12")).toEqual({ numerator: 12n, denominator: 100n });
+    expect(parseRateFraction("0.08")).toEqual({ numerator: 8n, denominator: 100n });
+    expect(parseRateFraction("0.01")).toEqual({ numerator: 1n, denominator: 100n });
+  });
+
+  it("round-trips through applyRate identically to a hand-built fraction", () => {
+    const parsed = parseRateFraction("0.12");
+    const amount = pesosToCentavos("1000.00");
+    expect(applyRate(amount, parsed.numerator, parsed.denominator)).toBe(applyRate(amount, 12n, 100n));
+  });
+
+  it("rejects garbage input", () => {
+    expect(() => parseRateFraction("abc")).toThrow();
   });
 });
 
