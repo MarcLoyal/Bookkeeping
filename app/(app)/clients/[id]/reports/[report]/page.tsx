@@ -3,17 +3,26 @@ import { notFound } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
+import { getClient } from "@/lib/data/clients";
+import { getPurchaseTotals, getSalesTotals } from "@/lib/data/tax-reports";
+import { getCurrentTaxRule } from "@/lib/data/tax-rules";
 import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/lib/accounting/reports";
-import { formatCentavos } from "@/lib/money";
+import { buildVatReturnSummary } from "@/lib/tax/vat-return";
+import { buildPercentageTaxSummary } from "@/lib/tax/percentage-tax";
+import { buildEightPercentSummary } from "@/lib/tax/eight-percent";
+import { formatCentavos, parseRateFraction, pesosToCentavos } from "@/lib/money";
 import { PrintButton } from "./print-button";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
   "income-statement": "Income Statement",
   "balance-sheet": "Balance Sheet",
+  "vat-return": "VAT Return Summary",
+  "percentage-tax": "Percentage Tax Summary",
+  "eight-percent-tax": "8% Income Tax Summary",
 };
 
-const REPORT_TABS = [
+const CORE_REPORT_TABS = [
   { slug: "trial-balance", label: "Trial Balance" },
   { slug: "income-statement", label: "Income Statement" },
   { slug: "balance-sheet", label: "Balance Sheet" },
@@ -36,6 +45,21 @@ export default async function ReportPage({
   const user = await requireCurrentUser();
   const { id, report } = await params;
   if (!REPORT_TITLES[report]) notFound();
+
+  const client = await getClient(user.id, id);
+  if (!client) notFound();
+
+  const isVat = client.vatStatus === "vat";
+  const isEightPercent = client.incomeTaxRegime === "eight_percent";
+  const isPlainPercentageTax = client.vatStatus === "non_vat" && !isEightPercent;
+
+  const reportTabs = [
+    ...CORE_REPORT_TABS,
+    ...(isVat ? [{ slug: "vat-return", label: "VAT Return" }] : []),
+    ...(isPlainPercentageTax ? [{ slug: "percentage-tax", label: "Percentage Tax" }] : []),
+    ...(isEightPercent ? [{ slug: "eight-percent-tax", label: "8% Income Tax" }] : []),
+  ];
+  if (!reportTabs.some((t) => t.slug === report)) notFound();
 
   const range = await searchParams;
   const { from, to } = { from: range.from || defaultRange().from, to: range.to || defaultRange().to };
@@ -62,7 +86,7 @@ export default async function ReportPage({
       </div>
 
       <nav className="no-print mt-3 flex gap-1 border-b border-slate-200">
-        {REPORT_TABS.map((t) => (
+        {reportTabs.map((t) => (
           <Link
             key={t.slug}
             href={`/clients/${id}/reports/${t.slug}?from=${from}&to=${to}`}
@@ -84,6 +108,176 @@ export default async function ReportPage({
         {report === "trial-balance" && <TrialBalanceView tb={tb} clientId={id} />}
         {report === "income-statement" && <IncomeStatementView is={incomeStatement} />}
         {report === "balance-sheet" && <BalanceSheetView bs={balanceSheet} tb={tb} clientId={id} />}
+        {report === "vat-return" && <VatReturnReport userId={user.id} clientId={id} from={from} to={to} />}
+        {report === "percentage-tax" && (
+          <PercentageTaxReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
+        )}
+        {report === "eight-percent-tax" && (
+          <EightPercentReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TaxReportDisclaimer({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+      <p className="font-semibold">Computation aid, not an official form.</p>
+      <p className="mt-1">
+        These figures are computed from your posted transactions and the rates on file in Settings → Tax Rules, to
+        help you manually enter numbers into the BIR portal — this app does not file or replicate the actual return.
+        Labels are plain-English descriptions, not official form line numbers; verify against the current form
+        before filing. {children}
+      </p>
+    </div>
+  );
+}
+
+async function VatReturnReport({ userId, clientId, from, to }: { userId: string; clientId: string; from: string; to: string }) {
+  const [sales, purchases, vatRateValue] = await Promise.all([
+    getSalesTotals(userId, clientId, from, to),
+    getPurchaseTotals(userId, clientId, from, to),
+    getCurrentTaxRule(userId, "vat_rate", to),
+  ]);
+  const summary = buildVatReturnSummary({
+    vatableSalesCentavos: sales.vatableSalesCentavos,
+    zeroRatedSalesCentavos: sales.zeroRatedSalesCentavos,
+    exemptSalesCentavos: sales.exemptSalesCentavos,
+    outputVatCentavos: sales.outputVatCentavos,
+    vatablePurchasesCentavos: purchases.vatablePurchasesCentavos,
+    inputVatCentavos: purchases.inputVatCentavos,
+  });
+
+  const rows: { label: string; amount: bigint; bold?: boolean }[] = [
+    { label: "Vatable Sales/Receipts", amount: summary.vatableSalesCentavos },
+    { label: "Zero-Rated Sales/Receipts", amount: summary.zeroRatedSalesCentavos },
+    { label: "Exempt Sales/Receipts", amount: summary.exemptSalesCentavos },
+    { label: "Total Sales/Receipts", amount: summary.totalSalesCentavos, bold: true },
+    { label: `Output Tax (${vatRateValue ?? "?"} of vatable sales)`, amount: summary.outputVatCentavos },
+    { label: "Vatable Purchases", amount: summary.vatablePurchasesCentavos },
+    { label: "Input Tax", amount: summary.inputVatCentavos },
+  ];
+
+  return (
+    <div className="max-w-xl">
+      <TaxReportDisclaimer />
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label} className={r.bold ? "border-t border-slate-200 font-medium" : ""}>
+                <td className="px-4 py-2">{r.label}</td>
+                <td className="px-4 py-2 text-right font-mono">{formatCentavos(r.amount)}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-slate-300 font-semibold">
+              <td className="px-4 py-2">{summary.netVatCentavos >= 0n ? "Net VAT Payable" : "Excess Input Tax (carried over)"}</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.netVatCentavos >= 0n ? summary.netVatCentavos : -summary.netVatCentavos)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+async function PercentageTaxReport({
+  userId,
+  from,
+  to,
+  grossReceiptsCentavos,
+}: {
+  userId: string;
+  clientId: string;
+  from: string;
+  to: string;
+  grossReceiptsCentavos: bigint;
+}) {
+  const rateValue = await getCurrentTaxRule(userId, "percentage_tax_rate", to);
+  const { numerator, denominator } = parseRateFraction(rateValue ?? "0");
+  const summary = buildPercentageTaxSummary(grossReceiptsCentavos, numerator, denominator);
+
+  return (
+    <div className="max-w-xl">
+      <TaxReportDisclaimer />
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
+          <tbody>
+            <tr>
+              <td className="px-4 py-2">Gross Sales/Receipts</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.grossReceiptsCentavos)}</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2">Tax Rate (from Tax Rules)</td>
+              <td className="px-4 py-2 text-right font-mono">{rateValue ?? "—"}</td>
+            </tr>
+            <tr className="border-t-2 border-slate-300 font-semibold">
+              <td className="px-4 py-2">Percentage Tax Due</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.taxDueCentavos)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+async function EightPercentReport({
+  userId,
+  from,
+  to,
+  grossReceiptsCentavos,
+}: {
+  userId: string;
+  clientId: string;
+  from: string;
+  to: string;
+  grossReceiptsCentavos: bigint;
+}) {
+  const [rateValue, thresholdValue] = await Promise.all([
+    getCurrentTaxRule(userId, "eight_percent_rate", to),
+    getCurrentTaxRule(userId, "eight_percent_threshold_annual", to),
+  ]);
+  const { numerator, denominator } = parseRateFraction(rateValue ?? "0");
+  const thresholdCentavos = pesosToCentavos(thresholdValue ?? "0");
+  const summary = buildEightPercentSummary(grossReceiptsCentavos, thresholdCentavos, numerator, denominator);
+
+  return (
+    <div className="max-w-xl">
+      <TaxReportDisclaimer>
+        <span className="font-semibold">
+          {" "}
+          Simplified: this treats the ₱{formatCentavos(thresholdCentavos)} threshold as applying fresh to this
+          period alone. The real 8% option applies it once per year, cumulatively — check year-to-date gross
+          receipts by hand if this isn't your first quarter above the threshold.
+        </span>
+      </TaxReportDisclaimer>
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
+          <tbody>
+            <tr>
+              <td className="px-4 py-2">Gross Sales/Receipts (this period)</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.grossReceiptsCentavos)}</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2">Less: Threshold (simplified, per period)</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.thresholdCentavos)}</td>
+            </tr>
+            <tr className="border-t border-slate-200 font-medium">
+              <td className="px-4 py-2">Taxable Amount</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.taxableAmountCentavos)}</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2">Tax Rate (from Tax Rules)</td>
+              <td className="px-4 py-2 text-right font-mono">{rateValue ?? "—"}</td>
+            </tr>
+            <tr className="border-t-2 border-slate-300 font-semibold">
+              <td className="px-4 py-2">Income Tax Due</td>
+              <td className="px-4 py-2 text-right font-mono">{formatCentavos(summary.taxDueCentavos)}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   );

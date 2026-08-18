@@ -100,6 +100,23 @@ export function roundHalfUp(numerator: bigint, denominator: bigint): bigint {
 }
 
 /**
+ * Parses a decimal fraction string as stored in tax_rules.value into an
+ * exact bigint numerator/denominator pair for applyRate() — never through a
+ * float, so an 8-decimal-place rate stays exact.
+ */
+export function parseRateFraction(input: string): { numerator: bigint; denominator: bigint } {
+  const cleaned = input.trim();
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(cleaned);
+  if (!match) {
+    throw new Error(`parseRateFraction: invalid decimal string "${input}"`);
+  }
+  const [, sign, wholePart, fractionPart = ""] = match;
+  const denominator = 10n ** BigInt(fractionPart.length);
+  const numerator = BigInt(sign + wholePart + fractionPart);
+  return { numerator, denominator };
+}
+
+/**
  * Applies a rate expressed as an exact fraction (numerator/denominator, as
  * stored in tax_rules — e.g. a standard-VAT-style rate is numerator 12,
  * denominator 100) to a centavos amount, rounding half-up once. Never
