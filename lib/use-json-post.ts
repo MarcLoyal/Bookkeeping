@@ -17,11 +17,17 @@ import { useRouter } from "next/navigation";
 export function useJsonPost<TBody>(url: string, onSuccessPath: (data: any) => string) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  // Which request field the server blamed (Route Handlers echo back the
+  // failing Zod issue's path[0] alongside the message — see e.g.
+  // app/api/clients/route.ts) so a form can highlight that specific input
+  // instead of showing one undifferentiated error line.
+  const [field, setField] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   async function submit(body: TBody) {
     setPending(true);
     setError(null);
+    setField(null);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -32,6 +38,7 @@ export function useJsonPost<TBody>(url: string, onSuccessPath: (data: any) => st
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) {
         setError(data.error ?? `Request failed (${res.status}).`);
+        setField(typeof data.field === "string" ? data.field : null);
         setPending(false);
         return;
       }
@@ -42,5 +49,5 @@ export function useJsonPost<TBody>(url: string, onSuccessPath: (data: any) => st
     }
   }
 
-  return { submit, error, pending };
+  return { submit, error, field, pending };
 }

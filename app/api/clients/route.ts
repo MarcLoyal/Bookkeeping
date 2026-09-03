@@ -24,7 +24,11 @@ export async function POST(req: NextRequest) {
 
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
+    const issue = parsed.error.issues[0];
+    return NextResponse.json(
+      { error: issue?.message ?? "Invalid input.", field: issue?.path[0] },
+      { status: 400 }
+    );
   }
 
   const client = await createClient(user.id, { firmId: user.firmId, ...parsed.data });
