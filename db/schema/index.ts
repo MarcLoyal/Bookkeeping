@@ -8,3 +8,4 @@ export * from "./contacts";
 export * from "./journal";
 export * from "./transactions";
 export * from "./period_locks";
+export * from "./password_reset_tokens";

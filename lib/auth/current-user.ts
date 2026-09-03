@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { withUserContext } from "@/db/client";
 import { users } from "@/db/schema";
-import { getSessionUserId } from "./session";
+import { getSessionClaims } from "./session";
 
 export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user";
 
@@ -28,12 +28,16 @@ export type CurrentUser = {
  * costs is a single indexed row lookup — cheap next to that risk.
  */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const userId = await getSessionUserId();
-  if (!userId) return null;
+  const claims = await getSessionClaims();
+  if (!claims) return null;
+  const { userId, tokenVersion } = claims;
 
   return withUserContext(userId, async (tx) => {
     const [row] = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!row || !row.active) return null;
+    // A password reset bumps users.tokenVersion, invalidating every JWT
+    // issued before it — stateless sessions have no other revocation path.
+    if (row.tokenVersion !== tokenVersion) return null;
     return {
       id: row.id,
       firmId: row.firmId,
