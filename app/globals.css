@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
+  --background: #f1f5f9;
   --foreground: #0f172a;
 }
 
@@ -10,8 +10,15 @@
   --color-foreground: var(--foreground);
 }
 
+/* A slightly deeper neutral than pure white/near-white, so the white cards
+   and tables throughout the app read as elevated rather than blending into
+   the page. A faint fixed glow at the top adds depth without competing with
+   dense content below it — deliberately lighter-touch than the login
+   page's grid+glow treatment, which only has to work behind a single card. */
 body {
-  background: var(--background);
+  background-color: var(--background);
+  background-image: radial-gradient(ellipse 90% 420px at 50% -10%, rgba(15, 23, 42, 0.05), transparent);
+  background-attachment: fixed;
   color: var(--foreground);
 }
 
@@ -22,6 +29,13 @@ body {
   @page {
     size: A4;
     margin: 15mm 12mm;
+  }
+  /* Printed/PDF-exported loose-leaf books and reports stay pure white
+     regardless of the on-screen app background — the PDF export route
+     renders with printBackground: true, so without this override the
+     tinted body background above would bleed into official ledger pages. */
+  body {
+    background: white;
   }
   .no-print {
     display: none !important;
