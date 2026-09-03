@@ -8,21 +8,22 @@ const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; status?: string }>;
 }) {
   const user = await requireCurrentUser();
   if (user.role === "client_user") redirect(`/clients/${user.clientId}`);
 
-  const { q } = await searchParams;
+  const { q, status } = await searchParams;
   const allClients = await listClients(user.id);
+  const byStatus = status ? allClients.filter((c) => c.status === status) : allClients;
   const filtered = q
-    ? allClients.filter(
+    ? byStatus.filter(
         (c) =>
           c.registeredName.toLowerCase().includes(q.toLowerCase()) ||
           c.tradeName?.toLowerCase().includes(q.toLowerCase()) ||
           c.tin.includes(q)
       )
-    : allClients;
+    : byStatus;
 
   return (
     <div>
@@ -38,7 +39,8 @@ export default async function ClientsPage({
         )}
       </div>
 
-      <form className="mt-4" action="/clients">
+      <form className="mt-4 flex items-center gap-3" action="/clients">
+        {status && <input type="hidden" name="status" value={status} />}
         <input
           type="text"
           name="q"
@@ -46,6 +48,14 @@ export default async function ClientsPage({
           placeholder="Search by name or TIN..."
           className="w-full max-w-sm rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
         />
+        {status && (
+          <Link
+            href="/clients"
+            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium capitalize text-slate-700 hover:bg-slate-200"
+          >
+            {status} ×
+          </Link>
+        )}
       </form>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
