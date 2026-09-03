@@ -14,9 +14,6 @@ export default async function LoginPage() {
           <p className="mt-1 text-sm text-slate-500">Sign in to your firm workspace</p>
         </div>
         <LoginForm />
-        <p className="mt-6 text-center text-xs text-slate-400">
-          Demo credentials are listed in DECISIONS.md after running <code>pnpm seed</code>.
-        </p>
       </div>
     </div>
   );

@@ -37,12 +37,23 @@ export default async function ClientLayout({
 
   return (
     <div>
+      <nav className="no-print mb-2 flex items-center gap-1.5 text-sm text-slate-500" aria-label="Breadcrumb">
+        <Link href="/dashboard" className="hover:text-slate-900 hover:underline">
+          Dashboard
+        </Link>
+        <span aria-hidden="true">/</span>
+        <Link href="/clients" className="hover:text-slate-900 hover:underline">
+          Clients
+        </Link>
+        <span aria-hidden="true">/</span>
+        <span className="text-slate-700">{client.registeredName}</span>
+      </nav>
       <div className="no-print mb-4">
         <div className="flex items-baseline gap-3">
           <h1 className="text-2xl font-bold tracking-tight">{client.registeredName}</h1>
-          <span className="text-sm text-slate-500">{client.tin}</span>
+          <span className="text-sm text-slate-600">{client.tin}</span>
         </div>
-        {client.tradeName && <p className="text-sm text-slate-500">{client.tradeName}</p>}
+        {client.tradeName && <p className="text-sm text-slate-600">{client.tradeName}</p>}
       </div>
       <nav className="no-print mb-6 flex gap-1 border-b border-slate-200">
         {TABS.map((tab) => (
