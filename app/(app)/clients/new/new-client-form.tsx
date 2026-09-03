@@ -1,16 +1,19 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useJsonPost } from "@/lib/use-json-post";
+import { formatTin } from "@/lib/tin-format";
 
 const inputClass =
   "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
 const errorInputClass =
   "mt-1 block w-full rounded-md border border-red-400 px-3 py-2 text-sm shadow-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500";
 const labelClass = "block text-sm font-medium text-slate-700";
+const requiredMark = <span className="text-red-600"> *</span>;
 
 export function NewClientForm() {
   const formRef = useRef<HTMLFormElement>(null);
+  const [tin, setTin] = useState("");
   const { submit, error, field, pending } = useJsonPost<Record<string, string>>(
     "/api/clients",
     (data) => `/clients/${data.id}`
@@ -33,7 +36,7 @@ export function NewClientForm() {
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-5 rounded-lg border border-slate-200 bg-white p-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <label className={labelClass} htmlFor="registeredName">Registered Name</label>
+          <label className={labelClass} htmlFor="registeredName">Registered Name{requiredMark}</label>
           <input
             id="registeredName"
             name="registeredName"
@@ -47,10 +50,12 @@ export function NewClientForm() {
           <input id="tradeName" name="tradeName" className={inputClass} />
         </div>
         <div>
-          <label className={labelClass} htmlFor="tin">TIN</label>
+          <label className={labelClass} htmlFor="tin">TIN{requiredMark}</label>
           <input
             id="tin"
             name="tin"
+            value={tin}
+            onChange={(e) => setTin(formatTin(e.target.value))}
             placeholder="000-000-000-00000"
             pattern="\d{3}-\d{3}-\d{3}-\d{5}"
             title="Format: 000-000-000-00000 (9-digit TIN + 5-digit branch code, dashes included)"
@@ -61,7 +66,7 @@ export function NewClientForm() {
           {fieldError("tin")}
         </div>
         <div>
-          <label className={labelClass} htmlFor="rdoCode">RDO Code</label>
+          <label className={labelClass} htmlFor="rdoCode">RDO Code{requiredMark}</label>
           <input
             id="rdoCode"
             name="rdoCode"
@@ -71,7 +76,7 @@ export function NewClientForm() {
           {fieldError("rdoCode")}
         </div>
         <div>
-          <label className={labelClass} htmlFor="taxpayerType">Taxpayer Type</label>
+          <label className={labelClass} htmlFor="taxpayerType">Taxpayer Type{requiredMark}</label>
           <select id="taxpayerType" name="taxpayerType" required className={inputClass} defaultValue="corporation">
             <option value="individual">Individual</option>
             <option value="corporation">Corporation</option>
@@ -81,7 +86,7 @@ export function NewClientForm() {
           </select>
         </div>
         <div>
-          <label className={labelClass} htmlFor="vatStatus">VAT Status</label>
+          <label className={labelClass} htmlFor="vatStatus">VAT Status{requiredMark}</label>
           <select id="vatStatus" name="vatStatus" required className={inputClass} defaultValue="vat">
             <option value="vat">VAT-Registered</option>
             <option value="non_vat">Non-VAT (Percentage Tax)</option>
@@ -89,7 +94,7 @@ export function NewClientForm() {
           </select>
         </div>
         <div className="sm:col-span-2">
-          <label className={labelClass} htmlFor="incomeTaxRegime">Income Tax Regime</label>
+          <label className={labelClass} htmlFor="incomeTaxRegime">Income Tax Regime{requiredMark}</label>
           <select id="incomeTaxRegime" name="incomeTaxRegime" required className={inputClass} defaultValue="rcit">
             <option value="graduated_itemized">Graduated Rates — Itemized Deductions</option>
             <option value="graduated_osd">Graduated Rates — Optional Standard Deduction</option>
@@ -99,7 +104,7 @@ export function NewClientForm() {
           </select>
         </div>
         <div className="sm:col-span-2">
-          <label className={labelClass} htmlFor="address">Registered Address</label>
+          <label className={labelClass} htmlFor="address">Registered Address{requiredMark}</label>
           <input
             id="address"
             name="address"
