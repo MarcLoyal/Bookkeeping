@@ -53,6 +53,37 @@ real Supabase Auth later means replacing `lib/auth/*` and pointing
 triggers, and RLS policies are already Supabase-shaped (`SECURITY DEFINER`
 helpers mirroring `auth.uid()`, etc.).
 
+## Password reset: token revocation and email abstraction
+
+- **Session revocation**: sessions are stateless JWTs (see above), which
+  normally have no server-side revocation mechanism. A password reset needs
+  one — otherwise a stolen session survives its own owner's reset. Fixed
+  with a `users.token_version` integer, embedded as a `tv` claim at login
+  and bumped on every password reset; `getCurrentUser()` rejects any JWT
+  whose `tv` claim doesn't match the current DB value. `middleware.ts`
+  deliberately does *not* also enforce this (it only checks JWT
+  signature/expiry, no DB access at the Edge) — an earlier version had
+  middleware redirect an "authed" user away from `/login`, which fought
+  `getCurrentUser()`'s DB-backed redirect for a session invalidated by a
+  reset and looped forever between `/login` and `/dashboard`. Removed;
+  `app/login/page.tsx` already does that redirect itself with the full
+  check.
+- **Reset tokens**: `password_reset_tokens` (RLS enabled, zero policies —
+  same deny-by-default pattern as everything else, reachable only through
+  the owner-role `authDb` connection) stores a SHA-256 hash of a random
+  token, never the token itself, mirroring how `passwordHash` never stores
+  a plaintext password. 30-minute expiry, single use, and a per-user rate
+  limit (3 requests / 15 minutes) on issuing new ones.
+- **Email enumeration**: `requestPasswordReset()` always resolves to
+  `{ ok: true }` — whether the address exists, is inactive, or is
+  rate-limited is never observable from the response.
+- **No email provider configured**: `lib/email/send.ts` logs to the server
+  console instead of sending real mail (see its docstring for how to swap
+  in a real provider later). `DEV_EMAIL_OUTBOX_PATH`, if set, additionally
+  appends each email as a JSON line to that file — a dev/test-only escape
+  hatch so `e2e/password-reset.test.ts` can read the reset link without a
+  real inbox; unset in production, nothing writes there.
+
 ## Architecture: Route Handlers instead of Server Actions for mutations
 
 Every mutating form (`POST /api/clients`, transaction encoding, reversal)

@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { userRoleEnum } from "./enums";
 import { clients } from "./clients";
 
@@ -21,6 +21,10 @@ export const users = pgTable(
     role: userRoleEnum("role").notNull(),
     // Dev auth shim only — see DECISIONS.md. Production swaps this for Supabase Auth.
     passwordHash: text("password_hash").notNull(),
+    // Embedded as a JWT claim at login; bumped on password reset so every
+    // session token issued before the reset stops verifying (stateless JWTs
+    // have no server-side revocation otherwise — see lib/auth/session.ts).
+    tokenVersion: integer("token_version").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

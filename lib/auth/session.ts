@@ -11,8 +11,8 @@ function secretKey(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-export async function createSession(userId: string): Promise<void> {
-  const token = await new SignJWT({ sub: userId })
+export async function createSession(userId: string, tokenVersion: number): Promise<void> {
+  const token = await new SignJWT({ sub: userId, tv: tokenVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
@@ -33,14 +33,22 @@ export async function destroySession(): Promise<void> {
   cookieStore.delete(COOKIE_NAME);
 }
 
-/** Returns the authenticated user's id from the session cookie, or null. Verifies the JWT signature/expiry; does NOT hit the database. */
-export async function getSessionUserId(): Promise<string | null> {
+export type SessionClaims = { userId: string; tokenVersion: number };
+
+/**
+ * Returns the session cookie's claims, or null. Verifies the JWT
+ * signature/expiry; does NOT hit the database — callers that need to know
+ * whether the session survives a password reset must compare tokenVersion
+ * against the user's current row themselves (see getCurrentUser).
+ */
+export async function getSessionClaims(): Promise<SessionClaims | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secretKey());
-    return typeof payload.sub === "string" ? payload.sub : null;
+    if (typeof payload.sub !== "string" || typeof payload.tv !== "number") return null;
+    return { userId: payload.sub, tokenVersion: payload.tv };
   } catch {
     return null;
   }

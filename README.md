@@ -75,6 +75,14 @@ needs a running app server and lives in `e2e/loose-leaf-books.test.ts` —
 in another. Tests #7, #8, #11 are Phase 2/3 (tax engine, AI extraction) and
 not applicable yet — see DECISIONS.md.
 
+`e2e/password-reset.test.ts` walks the forgot-password/reset-password flow
+and needs the server started with `DEV_EMAIL_OUTBOX_PATH` set (e.g.
+`DEV_EMAIL_OUTBOX_PATH=/tmp/dev-email-outbox.jsonl pnpm build && pnpm start`)
+so the test can read the reset link — no real email provider is configured
+yet, see `lib/email/send.ts`. It also changes seeded users' passwords, so
+re-run `pnpm seed` after a fresh `pnpm db:migrate` if you need the demo
+logins reset to `password123` afterward.
+
 ## Deliverable walkthrough
 
 **Phase 0**: log in → `/clients` → create a client → see it in the list.

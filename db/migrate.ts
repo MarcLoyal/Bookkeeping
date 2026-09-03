@@ -54,14 +54,53 @@ async function main() {
   await migrate(db, { migrationsFolder: "./db/migrations" });
 
   console.log("Applying hand-authored SQL (functions, triggers, RLS)...");
+  // Tracked so each file in db/sql/ runs exactly once ever, matching how
+  // drizzle-kit's own table migrations behave. Without this, re-running
+  // db:migrate against an already-migrated database (e.g. to pick up a new
+  // 00N_*.sql file) would re-execute every prior file too — and CREATE
+  // TRIGGER / CREATE POLICY aren't idempotent, so that fails outright.
+  const [{ existed: trackingTableExisted }] = await migrationClient<{ existed: boolean }[]>`
+    select exists (select 1 from pg_tables where tablename = '_sql_migrations_applied') as existed
+  `;
+  await migrationClient`
+    create table if not exists _sql_migrations_applied (
+      filename text primary key,
+      applied_at timestamptz not null default now()
+    )
+  `;
+  if (!trackingTableExisted) {
+    // First time this tracking mechanism has run. If the database already
+    // has 001's functions (i.e. it was migrated before this tracking table
+    // existed), backfill that one file as applied so it isn't re-run and
+    // hit "trigger/policy already exists" — any genuinely new file still
+    // runs normally below.
+    const [{ exists: alreadyHas001 }] = await migrationClient<{ exists: boolean }[]>`
+      select exists (select 1 from pg_proc where proname = 'app_current_user_id') as exists
+    `;
+    if (alreadyHas001) {
+      console.log("Detected an existing install predating migration tracking — backfilling 001_functions_triggers_rls.sql as already applied.");
+      await migrationClient`
+        insert into _sql_migrations_applied (filename) values ('001_functions_triggers_rls.sql')
+        on conflict do nothing
+      `;
+    }
+  }
   const sqlDir = path.join(__dirname, "sql");
   const files = readdirSync(sqlDir)
     .filter((f) => f.endsWith(".sql"))
     .sort();
   for (const file of files) {
+    const [already] = await migrationClient`
+      select 1 from _sql_migrations_applied where filename = ${file}
+    `;
+    if (already) {
+      console.log(`  -> ${file} (already applied, skipping)`);
+      continue;
+    }
     console.log(`  -> ${file}`);
     const sqlText = readFileSync(path.join(sqlDir, file), "utf-8");
     await migrationClient.unsafe(sqlText);
+    await migrationClient`insert into _sql_migrations_applied (filename) values (${file})`;
   }
 
   console.log("Done.");

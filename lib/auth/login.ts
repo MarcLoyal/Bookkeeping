@@ -33,7 +33,7 @@ export async function login(input: unknown): Promise<LoginResult> {
     return { ok: false, error: "Invalid email or password." };
   }
 
-  await createSession(row.id);
+  await createSession(row.id, row.tokenVersion);
   await authDb
     .insert(auditLog)
     .values({ actorUserId: row.id, action: "LOGIN", tableName: "users", recordId: row.id });
