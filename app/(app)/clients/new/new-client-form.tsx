@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useJsonPost } from "@/lib/use-json-post";
 import { formatTin } from "@/lib/tin-format";
+import { PhAddressCascade } from "@/components/ph-address-cascade";
 
 const inputClass =
   "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -14,6 +15,7 @@ const requiredMark = <span className="text-red-600"> *</span>;
 export function NewClientForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const [tin, setTin] = useState("");
+  const [address, setAddress] = useState("");
   const { submit, error, field, pending } = useJsonPost<Record<string, string>>(
     "/api/clients",
     (data) => `/clients/${data.id}`
@@ -104,13 +106,9 @@ export function NewClientForm() {
           </select>
         </div>
         <div className="sm:col-span-2">
-          <label className={labelClass} htmlFor="address">Registered Address{requiredMark}</label>
-          <input
-            id="address"
-            name="address"
-            required
-            className={field === "address" ? errorInputClass : inputClass}
-          />
+          <label className={labelClass}>Registered Address{requiredMark}</label>
+          <input type="hidden" name="address" value={address} />
+          <PhAddressCascade onChange={setAddress} required />
           {fieldError("address")}
         </div>
       </div>

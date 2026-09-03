@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@aivangogh/ph-address':
+        specifier: ^2026.2.3
+        version: 2026.2.3
       '@tanstack/react-table':
         specifier: ^8.20.5
         version: 8.21.3(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -98,6 +101,10 @@ importers:
         version: 2.1.9(@types/node@20.19.43)(lightningcss@1.32.0)
 
 packages:
+
+  '@aivangogh/ph-address@2026.2.3':
+    resolution: {integrity: sha512-Pwz9WOcEp0FOzFtTttENv+/fHDa+/o32yVrE2MznfIIsj3mJiesx5lxDWWmh34O/gXF5ukN41+9AW5UNTxKGJQ==}
+    engines: {node: '>=18'}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -2689,6 +2696,9 @@ packages:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
 
+  pako@2.2.0:
+    resolution: {integrity: sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==}
+
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -3186,6 +3196,10 @@ packages:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
+
+  '@aivangogh/ph-address@2026.2.3':
+    dependencies:
+      pako: 2.2.0
 
   '@alloc/quick-lru@5.2.0': {}
 
@@ -5507,6 +5521,8 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
+
+  pako@2.2.0: {}
 
   parent-module@1.0.1:
     dependencies:
