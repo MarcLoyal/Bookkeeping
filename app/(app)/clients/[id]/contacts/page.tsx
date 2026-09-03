@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { listContacts } from "@/lib/data/contacts";
 
@@ -15,8 +16,20 @@ export default async function ContactsPage({ params }: { params: Promise<{ id: s
 
   return (
     <div>
-      <h2 className="text-lg font-semibold">Contacts</h2>
-      <p className="mt-1 text-sm text-slate-500">{contacts.length} customers &amp; suppliers.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Contacts</h2>
+          <p className="mt-1 text-sm text-slate-500">{contacts.length} customers &amp; suppliers.</p>
+        </div>
+        {user.role !== "client_user" && (
+          <Link
+            href={`/clients/${id}/contacts/new`}
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            + Add Contact
+          </Link>
+        )}
+      </div>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
