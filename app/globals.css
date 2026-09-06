@@ -50,4 +50,23 @@ body {
     break-after: auto;
     page-break-after: auto;
   }
+
+  /* BIR form replicas (2550Q, 2551Q, etc.) are Legal-size in real life,
+     unlike the A4 loose-leaf books above — a named page so each can opt in
+     without changing the document-wide default. */
+  @page bir-form {
+    size: 8.5in 13in;
+    margin: 10mm;
+  }
+  .bir-form-page {
+    page: bir-form;
+    break-after: page;
+    page-break-after: always;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  .bir-form-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
 }
