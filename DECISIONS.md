@@ -131,6 +131,32 @@ interaction, not a bug in the policies themselves.
   before any real filing — never treat them as authoritative without
   checking current BIR issuances.
 
+## BIR form replicas (2550Q, 2551Q)
+
+`components/bir/` and `app/(app)/clients/[id]/reports/[report]/bir-2550q-form.tsx` /
+`bir-2551q-form.tsx` render visual replicas of two actual BIR forms —
+field positions, labels, and line numbers copied from the real form PDFs
+the user supplied for this feature (2550Q April 2024 ENCS, 2551Q January
+2018 ENCS), not invented. This is the one exception to "never invent BIR
+form layouts": the layout is transcribed from an authentic specimen, not
+guessed.
+
+Only lines this app has real data for are filled in — Part I background
+info from the client record, and the sales/purchases/output-input VAT (or
+percentage-tax) figures already computed by `lib/tax/vat-return.ts` /
+`lib/tax/percentage-tax.ts`. Every other line (schedules, prior-quarter
+carryovers, capital goods amortization, EWT withheld, advance VAT,
+penalties, the ATC lookup on 2551Q's ~20-category table, payment/signature
+sections) renders as blank boxes with an inline note, rather than an
+assumed zero — this app doesn't track that data, and a blank is honest
+where a zero would misrepresent an unknown as a fact.
+
+Eight other forms were supplied in the same batch (1701A, 1701Q, 1702Q,
+1702RT, 1702MX, 1601C, 1601EQ, 2307) but are not replicated: this app has
+no computation engine at all for income tax, withholding, or the 2307
+certificate (Phase 3, per Scope above) — building the layout alone would
+produce a form that looks official but has nothing real to fill it with.
+
 ## Chart of accounts
 
 `lib/accounting/coa-template.ts` (`PH_SME_CHART_OF_ACCOUNTS`) is the PH SME

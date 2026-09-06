@@ -10,15 +10,20 @@ import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/li
 import { buildVatReturnSummary } from "@/lib/tax/vat-return";
 import { buildPercentageTaxSummary } from "@/lib/tax/percentage-tax";
 import { buildEightPercentSummary } from "@/lib/tax/eight-percent";
+import { quarterLabelFor } from "@/lib/tax/quarter-label";
 import { formatCentavos, parseRateFraction, pesosToCentavos } from "@/lib/money";
 import { PrintButton } from "./print-button";
+import { Bir2550QForm } from "./bir-2550q-form";
+import { Bir2551QForm } from "./bir-2551q-form";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
   "income-statement": "Income Statement",
   "balance-sheet": "Balance Sheet",
   "vat-return": "VAT Return Summary",
+  "vat-return-form": "VAT Return (BIR Form 2550Q)",
   "percentage-tax": "Percentage Tax Summary",
+  "percentage-tax-form": "Percentage Tax (BIR Form 2551Q)",
   "eight-percent-tax": "8% Income Tax Summary",
 };
 
@@ -55,8 +60,10 @@ export default async function ReportPage({
 
   const reportTabs = [
     ...CORE_REPORT_TABS,
-    ...(isVat ? [{ slug: "vat-return", label: "VAT Return" }] : []),
-    ...(isPlainPercentageTax ? [{ slug: "percentage-tax", label: "Percentage Tax" }] : []),
+    ...(isVat ? [{ slug: "vat-return", label: "VAT Return" }, { slug: "vat-return-form", label: "VAT Return (BIR Form)" }] : []),
+    ...(isPlainPercentageTax
+      ? [{ slug: "percentage-tax", label: "Percentage Tax" }, { slug: "percentage-tax-form", label: "Percentage Tax (BIR Form)" }]
+      : []),
     ...(isEightPercent ? [{ slug: "eight-percent-tax", label: "8% Income Tax" }] : []),
   ];
   if (!reportTabs.some((t) => t.slug === report)) notFound();
@@ -109,8 +116,18 @@ export default async function ReportPage({
         {report === "income-statement" && <IncomeStatementView is={incomeStatement} />}
         {report === "balance-sheet" && <BalanceSheetView bs={balanceSheet} tb={tb} clientId={id} />}
         {report === "vat-return" && <VatReturnReport userId={user.id} clientId={id} from={from} to={to} />}
+        {report === "vat-return-form" && <Vat2550QFormReport userId={user.id} client={client} from={from} to={to} />}
         {report === "percentage-tax" && (
           <PercentageTaxReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
+        )}
+        {report === "percentage-tax-form" && (
+          <PercentageTax2551QFormReport
+            userId={user.id}
+            client={client}
+            from={from}
+            to={to}
+            grossReceiptsCentavos={incomeStatement.revenueCentavos}
+          />
         )}
         {report === "eight-percent-tax" && (
           <EightPercentReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
@@ -178,6 +195,38 @@ async function VatReturnReport({ userId, clientId, from, to }: { userId: string;
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+async function Vat2550QFormReport({
+  userId,
+  client,
+  from,
+  to,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  from: string;
+  to: string;
+}) {
+  const [sales, purchases] = await Promise.all([
+    getSalesTotals(userId, client.id, from, to),
+    getPurchaseTotals(userId, client.id, from, to),
+  ]);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir2550QForm
+        client={client}
+        quarterLabel={quarterLabelFor(from)}
+        from={from}
+        to={to}
+        sales={sales}
+        purchases={purchases}
+      />
     </div>
   );
 }
@@ -279,6 +328,32 @@ async function EightPercentReport({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+async function PercentageTax2551QFormReport({
+  userId,
+  client,
+  from,
+  to,
+  grossReceiptsCentavos,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  from: string;
+  to: string;
+  grossReceiptsCentavos: bigint;
+}) {
+  const rateValue = await getCurrentTaxRule(userId, "percentage_tax_rate", to);
+  const { numerator, denominator } = parseRateFraction(rateValue ?? "0");
+  const summary = buildPercentageTaxSummary(grossReceiptsCentavos, numerator, denominator);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir2551QForm client={client} quarterLabel={quarterLabelFor(from)} from={from} to={to} summary={summary} />
     </div>
   );
 }
