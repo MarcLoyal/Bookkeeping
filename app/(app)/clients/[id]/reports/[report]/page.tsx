@@ -4,19 +4,22 @@ import { requireCurrentUser } from "@/lib/auth/current-user";
 import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { getClient } from "@/lib/data/clients";
-import { getPurchaseTotals, getSalesTotals } from "@/lib/data/tax-reports";
+import { getEwtWithheldByCustomerTotal, getPurchaseTotals, getSalesTotals } from "@/lib/data/tax-reports";
 import { getWithholdingByAtcCode } from "@/lib/data/withholding";
 import { getCurrentTaxRule } from "@/lib/data/tax-rules";
-import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/lib/accounting/reports";
+import { getActiveWithholdingBrackets } from "@/lib/data/payroll";
+import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance, type IncomeStatement } from "@/lib/accounting/reports";
 import { buildVatReturnSummary } from "@/lib/tax/vat-return";
 import { buildPercentageTaxSummary } from "@/lib/tax/percentage-tax";
 import { buildEightPercentSummary } from "@/lib/tax/eight-percent";
-import { quarterLabelFor } from "@/lib/tax/quarter-label";
+import { quarterBoundsFor, quarterLabelFor } from "@/lib/tax/quarter-label";
 import { formatCentavos, parseRateFraction, pesosToCentavos } from "@/lib/money";
 import { PrintButton } from "./print-button";
 import { Bir2550QForm } from "./bir-2550q-form";
 import { Bir2551QForm } from "./bir-2551q-form";
 import { Bir1601EqForm } from "./bir-1601eq-form";
+import { Bir1701QForm } from "./bir-1701q-form";
+import { Bir1701AForm } from "./bir-1701a-form";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
@@ -28,6 +31,8 @@ const REPORT_TITLES: Record<string, string> = {
   "percentage-tax-form": "Percentage Tax (BIR Form 2551Q)",
   "eight-percent-tax": "8% Income Tax Summary",
   "withholding-tax-form": "Withholding Tax (BIR Form 1601-EQ)",
+  "income-tax-quarterly-form": "Quarterly Income Tax (BIR Form 1701Q)",
+  "income-tax-annual-form": "Annual Income Tax (BIR Form 1701A)",
 };
 
 const CORE_REPORT_TABS = [
@@ -60,6 +65,16 @@ export default async function ReportPage({
   const isVat = client.vatStatus === "vat";
   const isEightPercent = client.incomeTaxRegime === "eight_percent";
   const isPlainPercentageTax = client.vatStatus === "non_vat" && !isEightPercent;
+  // 1701Q/1701A are individual income tax returns — only Single Proprietor
+  // and Professional taxpayers file them (corporations use the 1702
+  // series, a later Phase 3 group; a plain "individual" taxpayerType is a
+  // pure compensation earner who doesn't self-file quarterly/annual
+  // business income tax at all).
+  const isIndividualBusinessFiler = client.taxpayerType === "sole_prop" || client.taxpayerType === "professional";
+  // 1701A itself only covers OSD or 8% filers ("PURELY from Business/
+  // Profession", per the form's own title) — itemized-deduction
+  // individuals need the full BIR Form 1701, not built here.
+  const supports1701A = isIndividualBusinessFiler && (client.incomeTaxRegime === "graduated_osd" || isEightPercent);
 
   const reportTabs = [
     ...CORE_REPORT_TABS,
@@ -69,6 +84,8 @@ export default async function ReportPage({
       : []),
     ...(isEightPercent ? [{ slug: "eight-percent-tax", label: "8% Income Tax" }] : []),
     { slug: "withholding-tax-form", label: "Withholding Tax (BIR Form)" },
+    ...(isIndividualBusinessFiler ? [{ slug: "income-tax-quarterly-form", label: "Income Tax Quarterly (BIR Form)" }] : []),
+    ...(supports1701A ? [{ slug: "income-tax-annual-form", label: "Income Tax Annual (BIR Form)" }] : []),
   ];
   if (!reportTabs.some((t) => t.slug === report)) notFound();
 
@@ -137,6 +154,8 @@ export default async function ReportPage({
           <EightPercentReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
         )}
         {report === "withholding-tax-form" && <Withholding1601EqFormReport userId={user.id} client={client} from={from} to={to} />}
+        {report === "income-tax-quarterly-form" && <IncomeTax1701QFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
+        {report === "income-tax-annual-form" && <IncomeTax1701AFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
       </div>
     </div>
   );
@@ -381,6 +400,118 @@ async function Withholding1601EqFormReport({
         <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
       </TaxReportDisclaimer>
       <Bir1601EqForm client={client} quarterLabel={quarterLabelFor(from)} from={from} to={to} schedule={schedule} />
+    </div>
+  );
+}
+
+/** Income Statement for an arbitrary date range, reusing the accounts already fetched at the top of the page (accounts don't vary by date range, only posted lines do). */
+async function incomeStatementFor(userId: string, clientId: string, accounts: Awaited<ReturnType<typeof listAccounts>>, from: string, to: string): Promise<IncomeStatement> {
+  const lines = await listPostedLinesForReport(userId, clientId, from, to);
+  return buildIncomeStatement(buildTrialBalance(accounts, lines));
+}
+
+async function IncomeTax1701QFormReport({
+  userId,
+  client,
+  accounts,
+  from,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  accounts: Awaited<ReturnType<typeof listAccounts>>;
+  from: string;
+}) {
+  const bounds = quarterBoundsFor(from);
+  if (bounds.quarterNumber === 4) {
+    return (
+      <div className="max-w-xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        BIR Form 1701Q has no 4th-quarter filing — the real form only offers First/Second/Third Quarter checkboxes.
+        The 4th quarter is reconciled directly on the Annual Return (BIR Form 1701A). Pick a date within Q1–Q3 above.
+      </div>
+    );
+  }
+
+  const [thisQuarter, previousCumulative, ewtThisQuarter, ewtPrevious, graduatedBrackets, eightPercentRateValue, eightPercentThresholdValue] = await Promise.all([
+    incomeStatementFor(userId, client.id, accounts, bounds.quarterStartIso, bounds.quarterEndIso),
+    bounds.previousCumulativeEndIso ? incomeStatementFor(userId, client.id, accounts, bounds.yearStartIso, bounds.previousCumulativeEndIso) : Promise.resolve(null),
+    getEwtWithheldByCustomerTotal(userId, client.id, bounds.quarterStartIso, bounds.quarterEndIso),
+    bounds.previousCumulativeEndIso ? getEwtWithheldByCustomerTotal(userId, client.id, bounds.yearStartIso, bounds.previousCumulativeEndIso) : Promise.resolve(0n),
+    getActiveWithholdingBrackets(userId, bounds.quarterEndIso),
+    getCurrentTaxRule(userId, "eight_percent_rate", bounds.quarterEndIso),
+    getCurrentTaxRule(userId, "eight_percent_threshold_annual", bounds.quarterEndIso),
+  ]);
+
+  const eightPercentRate = eightPercentRateValue ? parseRateFraction(eightPercentRateValue) : null;
+  const eightPercentThresholdCentavos = eightPercentThresholdValue ? pesosToCentavos(eightPercentThresholdValue) : null;
+
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir1701QForm
+        client={client}
+        quarterLabel={quarterLabelFor(from)}
+        quarterNumber={bounds.quarterNumber as 1 | 2 | 3}
+        from={bounds.quarterStartIso}
+        to={bounds.quarterEndIso}
+        thisQuarter={thisQuarter}
+        previousCumulative={previousCumulative}
+        ewtWithheldThisQuarter={ewtThisQuarter}
+        ewtWithheldPreviousQuarters={ewtPrevious}
+        graduatedBrackets={graduatedBrackets}
+        eightPercentRate={eightPercentRate}
+        eightPercentThresholdCentavos={eightPercentThresholdCentavos}
+      />
+    </div>
+  );
+}
+
+async function IncomeTax1701AFormReport({
+  userId,
+  client,
+  accounts,
+  from,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  accounts: Awaited<ReturnType<typeof listAccounts>>;
+  from: string;
+}) {
+  const year = from.slice(0, 4);
+  const yearStartIso = `${year}-01-01`;
+  const yearEndIso = `${year}-12-31`;
+  const q3EndIso = `${year}-09-30`;
+
+  const [fullYear, first9Months, ewtFullYear, ewtFirst9Months, graduatedBrackets, eightPercentRateValue, eightPercentThresholdValue] = await Promise.all([
+    incomeStatementFor(userId, client.id, accounts, yearStartIso, yearEndIso),
+    incomeStatementFor(userId, client.id, accounts, yearStartIso, q3EndIso),
+    getEwtWithheldByCustomerTotal(userId, client.id, yearStartIso, yearEndIso),
+    getEwtWithheldByCustomerTotal(userId, client.id, yearStartIso, q3EndIso),
+    getActiveWithholdingBrackets(userId, yearEndIso),
+    getCurrentTaxRule(userId, "eight_percent_rate", yearEndIso),
+    getCurrentTaxRule(userId, "eight_percent_threshold_annual", yearEndIso),
+  ]);
+
+  const eightPercentRate = eightPercentRateValue ? parseRateFraction(eightPercentRateValue) : null;
+  const eightPercentThresholdCentavos = eightPercentThresholdValue ? pesosToCentavos(eightPercentThresholdValue) : null;
+
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir1701AForm
+        client={client}
+        year={year}
+        fullYear={fullYear}
+        first9Months={first9Months}
+        ewtFullYear={ewtFullYear}
+        ewtFirst9Months={ewtFirst9Months}
+        graduatedBrackets={graduatedBrackets}
+        eightPercentRate={eightPercentRate}
+        eightPercentThresholdCentavos={eightPercentThresholdCentavos}
+      />
     </div>
   );
 }
