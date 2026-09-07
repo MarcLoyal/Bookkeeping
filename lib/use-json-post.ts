@@ -42,7 +42,14 @@ export function useJsonPost<TBody>(url: string, onSuccessPath: (data: any) => st
         setPending(false);
         return;
       }
+      // `refresh()` alongside `push()`: a push to a *different* URL already
+      // fetches fresh server data on its own, but a push to the SAME URL
+      // (e.g. a settings form that just re-lists the page it's on) is a
+      // no-op for Next's router — it won't refetch, leaving the page
+      // showing stale data until a manual reload. refresh() forces that
+      // refetch either way; harmless when push already did it.
       router.push(onSuccessPath(data));
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed.");
       setPending(false);
