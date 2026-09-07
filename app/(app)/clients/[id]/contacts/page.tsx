@@ -39,6 +39,7 @@ export default async function ContactsPage({ params }: { params: Promise<{ id: s
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">TIN</th>
               <th className="px-4 py-3">Address</th>
+              <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -50,6 +51,13 @@ export default async function ContactsPage({ params }: { params: Promise<{ id: s
                   {c.tin || <span className="text-amber-600">missing — required for SLSP</span>}
                 </td>
                 <td className="px-4 py-3 text-slate-600">{c.address}</td>
+                <td className="px-4 py-3 text-right">
+                  {(c.type === "supplier" || c.type === "both") && (
+                    <Link href={`/clients/${id}/contacts/${c.id}/2307`} className="text-xs font-medium text-slate-600 hover:underline">
+                      BIR Form 2307
+                    </Link>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

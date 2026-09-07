@@ -5,6 +5,7 @@ import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { getClient } from "@/lib/data/clients";
 import { getPurchaseTotals, getSalesTotals } from "@/lib/data/tax-reports";
+import { getWithholdingByAtcCode } from "@/lib/data/withholding";
 import { getCurrentTaxRule } from "@/lib/data/tax-rules";
 import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/lib/accounting/reports";
 import { buildVatReturnSummary } from "@/lib/tax/vat-return";
@@ -15,6 +16,7 @@ import { formatCentavos, parseRateFraction, pesosToCentavos } from "@/lib/money"
 import { PrintButton } from "./print-button";
 import { Bir2550QForm } from "./bir-2550q-form";
 import { Bir2551QForm } from "./bir-2551q-form";
+import { Bir1601EqForm } from "./bir-1601eq-form";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
@@ -25,6 +27,7 @@ const REPORT_TITLES: Record<string, string> = {
   "percentage-tax": "Percentage Tax Summary",
   "percentage-tax-form": "Percentage Tax (BIR Form 2551Q)",
   "eight-percent-tax": "8% Income Tax Summary",
+  "withholding-tax-form": "Withholding Tax (BIR Form 1601-EQ)",
 };
 
 const CORE_REPORT_TABS = [
@@ -65,6 +68,7 @@ export default async function ReportPage({
       ? [{ slug: "percentage-tax", label: "Percentage Tax" }, { slug: "percentage-tax-form", label: "Percentage Tax (BIR Form)" }]
       : []),
     ...(isEightPercent ? [{ slug: "eight-percent-tax", label: "8% Income Tax" }] : []),
+    { slug: "withholding-tax-form", label: "Withholding Tax (BIR Form)" },
   ];
   if (!reportTabs.some((t) => t.slug === report)) notFound();
 
@@ -132,6 +136,7 @@ export default async function ReportPage({
         {report === "eight-percent-tax" && (
           <EightPercentReport userId={user.id} clientId={id} from={from} to={to} grossReceiptsCentavos={incomeStatement.revenueCentavos} />
         )}
+        {report === "withholding-tax-form" && <Withholding1601EqFormReport userId={user.id} client={client} from={from} to={to} />}
       </div>
     </div>
   );
@@ -354,6 +359,28 @@ async function PercentageTax2551QFormReport({
         <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
       </TaxReportDisclaimer>
       <Bir2551QForm client={client} quarterLabel={quarterLabelFor(from)} from={from} to={to} summary={summary} />
+    </div>
+  );
+}
+
+async function Withholding1601EqFormReport({
+  userId,
+  client,
+  from,
+  to,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  from: string;
+  to: string;
+}) {
+  const schedule = await getWithholdingByAtcCode(userId, client.id, from, to);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir1601EqForm client={client} quarterLabel={quarterLabelFor(from)} from={from} to={to} schedule={schedule} />
     </div>
   );
 }

@@ -152,10 +152,43 @@ assumed zero — this app doesn't track that data, and a blank is honest
 where a zero would misrepresent an unknown as a fact.
 
 Eight other forms were supplied in the same batch (1701A, 1701Q, 1702Q,
-1702RT, 1702MX, 1601C, 1601EQ, 2307) but are not replicated: this app has
-no computation engine at all for income tax, withholding, or the 2307
-certificate (Phase 3, per Scope above) — building the layout alone would
-produce a form that looks official but has nothing real to fill it with.
+1702RT, 1702MX, 1601C, 1601EQ, 2307) but were not replicated at the time —
+this app had no computation engine at all for income tax, withholding, or
+the 2307 certificate. Phase 3 (per Scope above) is building those engines
+form by form; see "Withholding tax (1601-EQ, 2307)" below for the first
+group.
+
+## Withholding tax (1601-EQ, 2307)
+
+Phase 3, Group 1: `lib/data/withholding.ts` aggregates posted `purchases`
+rows flagged `ewtApplicable = 'yes'` — no new computation logic was needed,
+since expanded withholding tax is entered as a manually-typed amount at
+posting time (`ewtCode`/`ewtAmountCentavos`), not computed by this app.
+Two views on the same underlying data:
+
+- `getWithholdingByAtcCode` groups by ATC code, for 1601-EQ's Part II
+  schedule (`bir-1601eq-form.tsx`) — one return per client per quarter.
+- `getWithholdingCertificates` groups by contact then by ATC code within
+  that contact, bucketing income payments into calendar months, for
+  2307's Part III (`bir-2307-certificate.tsx`, at
+  `/clients/[id]/contacts/[contactId]/2307`) — one certificate per payee
+  per quarter, linked from the Contacts list for supplier/both contacts.
+
+`lib/tax/atc-codes.ts` is a description lookup (code → nature-of-income +
+rate), transcribed from the Schedule of Alphanumeric Tax Codes printed on
+1601-EQ's own page 2 (the source PDF's ATC table on 2307's page 2 also
+exists, but its text extraction came back with codes and descriptions in
+scrambled column order — unusable without guessing the correspondence, so
+it wasn't used). This is deliberately not exhaustive; `ewtCode` itself
+stays free text entered at posting time, unvalidated against this list —
+an unrecognized code still renders, just without a description, rather
+than being rejected or guessed at.
+
+Not tracked, left blank on both forms: remittances/credits from prior
+filings, penalties, Part III payment details (1601-EQ), and 2307's Section
+B (money payments subject to business-tax withholding — a different tax
+category from expanded withholding tax), plus all signature/accreditation
+fields.
 
 ## Chart of accounts
 
