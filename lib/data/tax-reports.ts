@@ -42,6 +42,25 @@ export async function getSalesTotals(userId: string, clientId: string, from: str
   });
 }
 
+/** Sum of EWT customers withheld on this client's posted sales invoices for the period — the creditable-tax-withheld figure BIR Form 2307s received FROM customers represent (1701Q Schedule III / 1701A Part IV.C). */
+export async function getEwtWithheldByCustomerTotal(userId: string, clientId: string, from: string, to: string): Promise<bigint> {
+  return withUserContext(userId, async (tx) => {
+    const rows = await tx
+      .select({ ewtWithheldByCustomerCentavos: salesInvoices.ewtWithheldByCustomerCentavos })
+      .from(salesInvoices)
+      .innerJoin(journalEntries, eq(salesInvoices.journalEntryId, journalEntries.id))
+      .where(
+        and(
+          eq(salesInvoices.clientId, clientId),
+          eq(journalEntries.status, "posted"),
+          gte(salesInvoices.invoiceDate, from),
+          lte(salesInvoices.invoiceDate, to)
+        )
+      );
+    return rows.reduce((sum, r) => sum + r.ewtWithheldByCustomerCentavos, 0n);
+  });
+}
+
 export type PurchaseTotals = {
   vatablePurchasesCentavos: bigint;
   inputVatCentavos: bigint;

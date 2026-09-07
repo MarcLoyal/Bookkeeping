@@ -290,9 +290,10 @@ from the Phase 3 kickoff (a client who is both a compensation earner and a
 business/professional) is about *the client's own* compensation income from
 *someone else's* payroll (reported to them via BIR Form 2316) — unrelated
 to this app's payroll engine, which computes what a client *who is an
-employer* owes on *their own* staff. 1701Q/1701A's mixed-income handling
-will need a small manual "outside compensation income + tax withheld"
-input, not a payroll linkage.
+employer* owes on *their own* staff. Building 1701Q/1701A later confirmed
+this doesn't even need the manual compensation-income input this note
+originally proposed — see "Individual income tax (1701Q, 1701A)" below:
+neither form's own computation ever touches compensation income at all.
 
 **Schema** (`db/schema/payroll.ts`): `employees` holds only payroll-specific
 attributes, referencing a `contacts` row (type `employee`) for identity —
@@ -402,6 +403,82 @@ Not yet built: employee/payroll-run editing, a payslip PDF/print layout
 (the detail page is an on-screen table only), and no automatic 13th-month
 computation — the amount is entered per employee, not summed from the
 year's prior payslips.
+
+## Individual income tax (1701Q, 1701A)
+
+Phase 3. Re-reading the actual 1701Q/1701A form PDFs before building
+(same "transcribe from an authentic specimen" policy as every other BIR
+form replica) corrected a real scoping mistake from the payroll design
+above: **neither form's computation ever touches compensation income, at
+all** — 1701A is explicitly titled "Individuals Earning Income PURELY
+from Business/Profession" (OSD or 8% only — no itemized-deduction option,
+no compensation section), and 1701Q's Schedule I/II only ever compute tax
+on business/professional Sales/Revenues, even when the taxpayer checks a
+"Mixed Income" ATC classification box. A true mixed-income annual
+reconciliation needs the full BIR Form 1701, which was never one of the 8
+forms in the original Phase 3 list — out of scope, not built.
+
+**Scope split between the two forms**, matching what each form itself
+actually supports:
+- **1701Q** (quarterly): available to any Single Proprietor/Professional
+  client, all three regimes (itemized, OSD, 8%) — the real form supports
+  itemized deductions via Schedule I's Item 37/39.
+- **1701A** (annual): available only to OSD or 8% clients, per the form's
+  own stated scope. A `graduated_itemized` individual client sees no
+  1701A tab at all (would need the full 1701, not built) but still gets
+  1701Q.
+- Gated on `taxpayerType` being `sole_prop` or `professional` — a plain
+  `individual` taxpayerType is a pure compensation earner who doesn't
+  self-file business income tax at all; corporations use the 1702 series
+  (a later Phase 3 group).
+
+**Cumulative computation** (`lib/tax/individual-income-tax.ts`,
+`lib/tax/quarter-label.ts`'s `quarterBoundsFor`): both the graduated and
+8% schedules on 1701Q are cumulative year-to-date per Sec. 74, NIRC — each
+quarter's own figures plus everything since Jan 1 through the prior
+quarter, computed fresh from this app's own Income Statement for the
+right date ranges each time, not carried forward as stored state. 1701Q
+has no Q4 checkbox on the real form (Q4 is reconciled directly on the
+Annual Return) — the report page shows an explanatory notice instead of
+the form for a Q4 date range.
+
+**Reuses, not new tables**: the graduated bracket table is the SAME
+`withholding_tax_brackets` the payroll withholding engine already seeds
+(Sec. 24(A)(2)(a) is one schedule, used both ways) — applied directly here
+with no annualize/de-annualize step, since the income figure passed in is
+already annual or cumulative-to-date. Cross-checked against the actual
+1701A/1701Q PDFs' own printed rate table, which matches exactly — good
+independent confirmation the seeded figures are correct. The 8% schedule
+reuses the existing `lib/tax/eight-percent.ts` unchanged, just fed a
+cumulative (1701Q) or full-year (1701A) gross-receipts figure instead of
+a single period's.
+
+**Real, derived, but assumption-bearing figures**: "tax payment for
+previous quarters" (1701Q Item 56, 1701A Item 58) is computed as what the
+graduated/8% tax would have been on the cumulative income through the end
+of the prior quarter — not an actual recorded payment (this app tracks
+none). Labeled on the form itself as assuming that amount was actually
+paid. Creditable tax withheld figures (1701Q Items 57-58, 1701A Items
+59-60) ARE real, tracked data — `sales_invoices.ewtWithheldByCustomerCentavos`
+(new `getEwtWithheldByCustomerTotal` query in `lib/data/tax-reports.ts`),
+previously captured but never surfaced in any report.
+
+**Rounding**: both forms print "DO NOT enter Centavos; 49 Centavos or Less
+drop down; 50 or more round up" — a whole-peso half-up rounding rule
+distinct from how this app displays money everywhere else (always 2
+decimals). `roundToWholePesos()` applies this ONLY at the point these two
+components render an `AmountBoxes` value; all underlying computation
+stays exact in centavos. Because each line is rounded independently for
+display (matching how a preparer fills in each box on the real paper
+form), displayed subtotals can be off by ±1 peso from summing the
+already-rounded lines above them — the underlying tax-due figures are
+still computed from the exact, unrounded totals, so this is a display-only
+artifact, not a computation bug.
+
+**Not tracked, left blank**: spousal information (Part II/V on both
+forms — this app has no spousal data model at all), prior-year excess
+credits, foreign tax credits, penalties, GPP partner income shares, and
+payment details.
 
 ## Known non-blocking follow-ups
 
