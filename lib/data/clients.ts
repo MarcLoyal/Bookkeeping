@@ -30,6 +30,7 @@ export type NewClientInput = {
   vatStatus: "vat" | "non_vat" | "vat_exempt";
   incomeTaxRegime: "graduated_itemized" | "graduated_osd" | "eight_percent" | "rcit" | "mcit_applicable";
   address: string;
+  dateOperationsCommenced?: string;
 };
 
 /** Creates the client and seeds it from the PH SME chart-of-accounts template (spec M1). */
@@ -54,6 +55,7 @@ export async function createClient(userId: string, input: NewClientInput) {
       vatStatus: input.vatStatus,
       incomeTaxRegime: input.incomeTaxRegime,
       address: input.address,
+      dateOperationsCommenced: input.dateOperationsCommenced || null,
       status: "active",
       onboardedAt: new Date(),
     });
@@ -70,5 +72,18 @@ export async function createClient(userId: string, input: NewClientInput) {
     );
 
     return { id };
+  });
+}
+
+/**
+ * There's no general client-edit feature yet — this is deliberately
+ * narrow: just the one field MCIT's 4th-taxable-year gate needs (see
+ * db/schema/clients.ts), settable after onboarding since it wasn't
+ * captured (or wasn't yet relevant) for clients created before this
+ * existed.
+ */
+export async function updateDateOperationsCommenced(userId: string, clientId: string, dateOperationsCommenced: string) {
+  return withUserContext(userId, async (tx) => {
+    await tx.update(clients).set({ dateOperationsCommenced }).where(eq(clients.id, clientId));
   });
 }

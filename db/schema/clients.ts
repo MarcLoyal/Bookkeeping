@@ -41,6 +41,13 @@ export const clients = pgTable(
   ptuNumber: text("ptu_number"),
   ptuDate: date("ptu_date"),
   orusRegistrationRef: text("orus_registration_ref"),
+  // Drives MCIT's 4th-taxable-year applicability gate (Sec. 27(E) NIRC as
+  // amended) — the guideline text on BIR Form 1702Q/1702-RT calls this
+  // "commencement of business operations"; 1702-RT's own Part I Item 10
+  // asks for "Date of Incorporation/Organization" as the practical proxy
+  // most preparers use. Nullable: unknown until entered, and MCIT simply
+  // doesn't apply (no line filled) for a corporate client until this is set.
+  dateOperationsCommenced: date("date_operations_commenced"),
   withholdingAgent: boolean("withholding_agent").notNull().default(false),
   topWithholdingAgent: boolean("top_withholding_agent").notNull().default(false),
   address: text("address").notNull(),

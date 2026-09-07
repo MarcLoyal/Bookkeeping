@@ -480,6 +480,76 @@ forms — this app has no spousal data model at all), prior-year excess
 credits, foreign tax credits, penalties, GPP partner income shares, and
 payment details.
 
+## Corporate income tax (1702Q, 1702-RT)
+
+Phase 3, completing the confirmed 8-form list (1702MX explicitly dropped —
+"No on PEZA/BOI"). Gated on `taxpayerType === "corporation"` and
+`incomeTaxRegime` being `rcit` or `mcit_applicable`; a `sole_prop`/
+`professional` client never sees these tabs (uses 1701Q/1701A instead).
+
+**`dateOperationsCommenced`** (new nullable `date` column on `clients`,
+migration `0003_loud_robbie_robertson.sql`): drives the MCIT 4th-taxable-
+year gate (Sec. 27(E), NIRC as amended by RA 11534). Confirmed as real
+data the form itself asks for — 1702-RT's own Part I Item 10 is "Date of
+Incorporation/Organization" — rather than inventing a field. No general
+client-edit page exists in this app, so a narrow, single-field
+click-to-edit component (`date-operations-commenced-field.tsx`) plus its
+own route was built instead of a full edit form, consistent with how
+every other single-field admin update in this app is scoped. Nullable:
+until it's set, MCIT simply doesn't apply — the forms show a "MCIT
+comparison not applied" notice rather than assuming a date.
+
+**RCIT vs. MCIT, "whichever is higher"** (`lib/tax/corporate-income-tax.ts`):
+Sec. 27(A) NIRC as amended by RA 11534 (CREATE Act) sets the general RCIT
+rate at 25%, with a 20% rate for MSME domestic corporations (net taxable
+income ≤ ₱5M AND total assets ≤ ₱100M excluding land). This app cannot
+auto-determine MSME eligibility — land isn't broken out from Property &
+Equipment in the chart of accounts — so `rcit_rate` is a single
+configurable `tax_rules` value, defaulting to the conservative 25%, with a
+note to verify per client before filing. MCIT (Sec. 27(E)) is 2% of gross
+income, applying from the 4th taxable year after operations commenced;
+CREATE's temporary 1% reduction (Jul 2020–Jun 2023) has expired and isn't
+modeled. `higherOfRcitOrMcit()` picks the higher due amount, per the form's
+own printed instruction — both 1702Q Schedule 3 and 1702-RT Item 43 show
+this comparison explicitly rather than silently substituting one figure.
+
+**Corporate OSD is 40% of gross income, not gross sales** — confirmed
+directly from both 1702Q's and 1702-RT's own printed formulas, and
+genuinely different from individual OSD (40% of gross *sales* on
+1701Q/1701A). Also unlike 1701Q's individual OSD schedule (where Cost of
+Sales/Services is only subtracted for itemized filers), corporations
+always subtract COS before Gross Income regardless of itemized/OSD
+election — 1702Q's Item 2 has no "(applicable only if availing Itemized
+Deductions)" qualifier that 1701Q's equivalent line does. Both were
+close-reads of the actual specimens, not assumptions.
+
+**Cumulative computation**: 1702Q reuses the exact same `quarterBoundsFor`
+/ `incomeStatementFor` machinery built for 1701Q — Sec. 74 NIRC cumulative
+year-to-date, computed fresh from the Income Statement each time, not
+stored state. Schedule 3 (MCIT) additionally needs each individual
+quarter's own (non-cumulative) gross income, queried per-quarter and
+summed, since MCIT's 2% base is cumulative gross income rather than
+cumulative taxable income. 1702Q likewise has no Q4 filing (reconciled on
+the Annual Return) — same explanatory-notice treatment as 1701Q.
+
+**1702-RT's "previous quarters' payment" lines** (Items 45-46): computed
+as what the first three quarters' 1702Q filings would have paid — RCIT or
+MCIT, whichever basis was higher for that cumulative period — assuming
+that amount was actually paid, the same "derived, not recorded" pattern
+already used for 1701Q/1701A's equivalent lines.
+
+**Real, disclosed gaps, not simplifications** (each noted directly on the
+form, not silently zeroed): NOLCO / net operating loss carry-over
+(Schedule III/IIIA — needs multi-year loss history this app doesn't
+persist), MCIT excess-credit carryforward across the 3 succeeding years
+(Schedule IV — same reason), the 17-category itemized-deduction breakdown
+(Schedule I — this app's chart of accounts has one aggregate Operating
+Expenses figure, not 17 line items), and MSME rate auto-determination (see
+above). Schedule V (book-vs-tax reconciliation) is skipped by design,
+consistent with this app's existing book-net-income-is-taxable-income
+simplification. Part V (PEZA/special-law tax relief) isn't reproduced —
+out of scope per "No on PEZA/BOI."
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

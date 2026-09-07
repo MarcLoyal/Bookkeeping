@@ -22,6 +22,13 @@
       "when": 1788801715308,
       "tag": "0002_sharp_mongoose",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788820982851,
+      "tag": "0003_loud_robbie_robertson",
+      "breakpoints": true
     }
   ]
 }

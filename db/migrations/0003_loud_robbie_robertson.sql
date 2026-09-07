@@ -1,0 +1,1 @@
+ALTER TABLE "clients" ADD COLUMN "date_operations_commenced" date;

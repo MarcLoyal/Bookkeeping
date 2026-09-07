@@ -20,6 +20,9 @@ import { Bir2551QForm } from "./bir-2551q-form";
 import { Bir1601EqForm } from "./bir-1601eq-form";
 import { Bir1701QForm } from "./bir-1701q-form";
 import { Bir1701AForm } from "./bir-1701a-form";
+import { Bir1702QForm } from "./bir-1702q-form";
+import { Bir1702RtForm } from "./bir-1702rt-form";
+import { isMcitApplicable } from "@/lib/tax/corporate-income-tax";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
@@ -33,6 +36,8 @@ const REPORT_TITLES: Record<string, string> = {
   "withholding-tax-form": "Withholding Tax (BIR Form 1601-EQ)",
   "income-tax-quarterly-form": "Quarterly Income Tax (BIR Form 1701Q)",
   "income-tax-annual-form": "Annual Income Tax (BIR Form 1701A)",
+  "corp-income-tax-quarterly-form": "Quarterly Income Tax (BIR Form 1702Q)",
+  "corp-income-tax-annual-form": "Annual Income Tax (BIR Form 1702-RT)",
 };
 
 const CORE_REPORT_TABS = [
@@ -75,6 +80,12 @@ export default async function ReportPage({
   // Profession", per the form's own title) — itemized-deduction
   // individuals need the full BIR Form 1701, not built here.
   const supports1701A = isIndividualBusinessFiler && (client.incomeTaxRegime === "graduated_osd" || isEightPercent);
+  // 1702Q/1702-RT are corporate income tax returns — the 8% option and the
+  // OSD-only 1701A don't apply to corporations, so this covers a plain
+  // RCIT/MCIT-regime corporation (1702RT is "Subject Only to REGULAR
+  // Income Tax Rate" — a corporation on eight_percent or an individual
+  // regime wouldn't be a corporation in the first place).
+  const isCorporateFiler = client.taxpayerType === "corporation" && (client.incomeTaxRegime === "rcit" || client.incomeTaxRegime === "mcit_applicable");
 
   const reportTabs = [
     ...CORE_REPORT_TABS,
@@ -86,6 +97,12 @@ export default async function ReportPage({
     { slug: "withholding-tax-form", label: "Withholding Tax (BIR Form)" },
     ...(isIndividualBusinessFiler ? [{ slug: "income-tax-quarterly-form", label: "Income Tax Quarterly (BIR Form)" }] : []),
     ...(supports1701A ? [{ slug: "income-tax-annual-form", label: "Income Tax Annual (BIR Form)" }] : []),
+    ...(isCorporateFiler
+      ? [
+          { slug: "corp-income-tax-quarterly-form", label: "Corp. Income Tax Quarterly (BIR Form)" },
+          { slug: "corp-income-tax-annual-form", label: "Corp. Income Tax Annual (BIR Form)" },
+        ]
+      : []),
   ];
   if (!reportTabs.some((t) => t.slug === report)) notFound();
 
@@ -156,6 +173,8 @@ export default async function ReportPage({
         {report === "withholding-tax-form" && <Withholding1601EqFormReport userId={user.id} client={client} from={from} to={to} />}
         {report === "income-tax-quarterly-form" && <IncomeTax1701QFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
         {report === "income-tax-annual-form" && <IncomeTax1701AFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
+        {report === "corp-income-tax-quarterly-form" && <CorpIncomeTax1702QFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
+        {report === "corp-income-tax-annual-form" && <CorpIncomeTax1702RtFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
       </div>
     </div>
   );
@@ -511,6 +530,120 @@ async function IncomeTax1701AFormReport({
         graduatedBrackets={graduatedBrackets}
         eightPercentRate={eightPercentRate}
         eightPercentThresholdCentavos={eightPercentThresholdCentavos}
+      />
+    </div>
+  );
+}
+
+async function CorpIncomeTax1702QFormReport({
+  userId,
+  client,
+  accounts,
+  from,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  accounts: Awaited<ReturnType<typeof listAccounts>>;
+  from: string;
+}) {
+  const bounds = quarterBoundsFor(from);
+  if (bounds.quarterNumber === 4) {
+    return (
+      <div className="max-w-xl rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        BIR Form 1702Q has no 4th-quarter filing — the real form only offers First/Second/Third Quarter checkboxes.
+        The 4th quarter is reconciled directly on the Annual Return (BIR Form 1702-RT). Pick a date within Q1–Q3
+        above.
+      </div>
+    );
+  }
+
+  const quarterNumbers = Array.from({ length: bounds.quarterNumber }, (_, i) => i + 1);
+  const [thisQuarter, previousCumulative, quarterlyIncomeStatements, ewtThisQuarter, ewtPrevious, rcitRateValue, mcitRateValue] = await Promise.all([
+    incomeStatementFor(userId, client.id, accounts, bounds.quarterStartIso, bounds.quarterEndIso),
+    bounds.previousCumulativeEndIso ? incomeStatementFor(userId, client.id, accounts, bounds.yearStartIso, bounds.previousCumulativeEndIso) : Promise.resolve(null),
+    Promise.all(
+      quarterNumbers.map(async (n) => {
+        const qBounds = quarterBoundsFor(`${bounds.year}-${String((n - 1) * 3 + 1).padStart(2, "0")}-01`);
+        const is = await incomeStatementFor(userId, client.id, accounts, qBounds.quarterStartIso, qBounds.quarterEndIso);
+        return { quarterNumber: n, grossIncomeCentavos: is.revenueCentavos - is.cogsCentavos + is.otherIncomeCentavos };
+      })
+    ),
+    getEwtWithheldByCustomerTotal(userId, client.id, bounds.quarterStartIso, bounds.quarterEndIso),
+    bounds.previousCumulativeEndIso ? getEwtWithheldByCustomerTotal(userId, client.id, bounds.yearStartIso, bounds.previousCumulativeEndIso) : Promise.resolve(0n),
+    getCurrentTaxRule(userId, "rcit_rate", bounds.quarterEndIso),
+    getCurrentTaxRule(userId, "mcit_rate", bounds.quarterEndIso),
+  ]);
+
+  const rcitRate = rcitRateValue ? parseRateFraction(rcitRateValue) : null;
+  const mcitRate = mcitRateValue ? parseRateFraction(mcitRateValue) : null;
+  const mcitApplicable = isMcitApplicable(client.dateOperationsCommenced, bounds.quarterEndIso);
+
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir1702QForm
+        client={client}
+        quarterLabel={quarterLabelFor(from)}
+        quarterNumber={bounds.quarterNumber as 1 | 2 | 3}
+        from={bounds.quarterStartIso}
+        to={bounds.quarterEndIso}
+        thisQuarter={thisQuarter}
+        previousCumulative={previousCumulative}
+        quarterlyGrossIncomes={quarterlyIncomeStatements}
+        ewtWithheldThisQuarter={ewtThisQuarter}
+        ewtWithheldPreviousQuarters={ewtPrevious}
+        rcitRate={rcitRate}
+        mcitRate={mcitRate}
+        mcitApplicable={mcitApplicable}
+      />
+    </div>
+  );
+}
+
+async function CorpIncomeTax1702RtFormReport({
+  userId,
+  client,
+  accounts,
+  from,
+}: {
+  userId: string;
+  client: NonNullable<Awaited<ReturnType<typeof getClient>>>;
+  accounts: Awaited<ReturnType<typeof listAccounts>>;
+  from: string;
+}) {
+  const year = from.slice(0, 4);
+  const yearStartIso = `${year}-01-01`;
+  const yearEndIso = `${year}-12-31`;
+  const q3EndIso = `${year}-09-30`;
+
+  const [fullYear, first9Months, ewtFullYear, ewtFirst9Months, rcitRateValue, mcitRateValue] = await Promise.all([
+    incomeStatementFor(userId, client.id, accounts, yearStartIso, yearEndIso),
+    incomeStatementFor(userId, client.id, accounts, yearStartIso, q3EndIso),
+    getEwtWithheldByCustomerTotal(userId, client.id, yearStartIso, yearEndIso),
+    getEwtWithheldByCustomerTotal(userId, client.id, yearStartIso, q3EndIso),
+    getCurrentTaxRule(userId, "rcit_rate", yearEndIso),
+    getCurrentTaxRule(userId, "mcit_rate", yearEndIso),
+  ]);
+
+  const rcitRate = rcitRateValue ? parseRateFraction(rcitRateValue) : null;
+  const mcitRate = mcitRateValue ? parseRateFraction(mcitRateValue) : null;
+
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> This replica only fills in lines this app has real data for — see notes on the form itself for what still needs manual entry.</span>
+      </TaxReportDisclaimer>
+      <Bir1702RtForm
+        client={client}
+        year={year}
+        fullYear={fullYear}
+        first9Months={first9Months}
+        ewtFullYear={ewtFullYear}
+        ewtFirst9Months={ewtFirst9Months}
+        rcitRate={rcitRate}
+        mcitRate={mcitRate}
       />
     </div>
   );
