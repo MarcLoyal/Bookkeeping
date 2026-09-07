@@ -143,6 +143,67 @@ export function buildCashDisbursementLines(input: {
   return lines;
 }
 
+/**
+ * Payroll Run: one aggregated entry across every payslip in the run (not
+ * one line per employee — per-employee detail lives in the payslips table,
+ * not the GL). Dr gross earnings (basic+OT+other taxable+de minimis+13th
+ * month, all of it a real cash expense regardless of tax treatment) and the
+ * employer's share of statutory contributions; Cr withholding tax payable,
+ * combined employee+employer statutory contributions payable, and net pay
+ * payable. Net pay is accrued to a payable, not paid out here — matches how
+ * AP/AR already work in this app: actual cash release is a separate Cash
+ * Disbursement against Salaries Payable.
+ */
+export type PayslipTotals = {
+  basicPayCentavos: Centavos;
+  overtimePayCentavos: Centavos;
+  otherTaxableEarningsCentavos: Centavos;
+  deMinimisCentavos: Centavos;
+  thirteenthMonthPayCentavos: Centavos;
+  sssEmployeeCentavos: Centavos;
+  sssEmployerCentavos: Centavos;
+  philhealthEmployeeCentavos: Centavos;
+  philhealthEmployerCentavos: Centavos;
+  pagibigEmployeeCentavos: Centavos;
+  pagibigEmployerCentavos: Centavos;
+  withholdingTaxCentavos: Centavos;
+  netPayCentavos: Centavos;
+};
+
+export function buildPayrollRunLines(input: {
+  salariesExpenseAccountId: string;
+  statutoryContributionsExpenseAccountId: string;
+  withholdingTaxPayableAccountId: string;
+  statutoryPayableAccountId: string;
+  salariesPayableAccountId: string;
+  payslips: PayslipTotals[];
+  memo?: string;
+}): LineDraft[] {
+  const grossExpenseCentavos = sumCentavos(
+    input.payslips.map((p) =>
+      sumCentavos([p.basicPayCentavos, p.overtimePayCentavos, p.otherTaxableEarningsCentavos, p.deMinimisCentavos, p.thirteenthMonthPayCentavos])
+    )
+  );
+  const employerContributionsCentavos = sumCentavos(
+    input.payslips.flatMap((p) => [p.sssEmployerCentavos, p.philhealthEmployerCentavos, p.pagibigEmployerCentavos])
+  );
+  const employeeContributionsCentavos = sumCentavos(
+    input.payslips.flatMap((p) => [p.sssEmployeeCentavos, p.philhealthEmployeeCentavos, p.pagibigEmployeeCentavos])
+  );
+  const withholdingTaxCentavos = sumCentavos(input.payslips.map((p) => p.withholdingTaxCentavos));
+  const netPayCentavos = sumCentavos(input.payslips.map((p) => p.netPayCentavos));
+
+  const lines = nonZero([
+    debit(input.salariesExpenseAccountId, grossExpenseCentavos, input.memo),
+    debit(input.statutoryContributionsExpenseAccountId, employerContributionsCentavos, input.memo),
+    credit(input.withholdingTaxPayableAccountId, withholdingTaxCentavos, input.memo),
+    credit(input.statutoryPayableAccountId, employeeContributionsCentavos + employerContributionsCentavos, input.memo),
+    credit(input.salariesPayableAccountId, netPayCentavos, input.memo),
+  ]);
+  assertBalanced(lines);
+  return lines;
+}
+
 /** General Journal: lines are entered directly by the bookkeeper — just validated. */
 export function buildGeneralJournalLines(lines: LineDraft[]): LineDraft[] {
   const cleaned = nonZero(lines);

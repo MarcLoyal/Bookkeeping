@@ -70,3 +70,13 @@ export const purchaseClassificationEnum = pgEnum("purchase_classification", [
 ]);
 
 export const filingFrequencyEnum = pgEnum("filing_frequency", ["monthly", "quarterly", "annual"]);
+
+// Daily/weekly rates need attendance/timekeeping data this app doesn't
+// track (no-work-no-pay would otherwise silently compute wrong amounts) —
+// deliberately not offered, see DECISIONS.md "Payroll subsystem".
+export const payFrequencyEnum = pgEnum("pay_frequency", ["monthly", "semi_monthly"]);
+
+// "regular" = an ordinary period's payroll. "thirteenth_month" = the
+// year-end mandatory 13th month pay run (PD 851), computed and taxed
+// differently from a regular period — see lib/tax/payslip.ts.
+export const payrollRunTypeEnum = pgEnum("payroll_run_type", ["regular", "thirteenth_month"]);
