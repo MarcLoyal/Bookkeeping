@@ -21,6 +21,7 @@ import {
   salesInvoices,
   taxRules,
   users,
+  withholdingTaxBrackets,
 } from "./schema";
 import { PH_SME_CHART_OF_ACCOUNTS } from "../lib/accounting/coa-template";
 import {
@@ -31,6 +32,7 @@ import {
   type LineDraft,
 } from "../lib/accounting/posting";
 import { pesosToCentavos } from "../lib/money";
+import { ANNUAL_WITHHOLDING_TAX_BRACKETS_2023 } from "../lib/tax/withholding-compensation";
 import { hashPassword } from "../lib/auth/password";
 
 const connectionString = process.env.MIGRATION_DATABASE_URL;
@@ -65,6 +67,7 @@ async function main() {
 
   console.log("Seeding tax_rules...");
   await seedTaxRules();
+  await seedWithholdingTaxBrackets();
 
   console.log("Creating firm + users...");
   const [firm] = await db.insert(firms).values({ name: "Keep.Books Demo Firm" }).returning();
@@ -205,7 +208,33 @@ async function seedTaxRules() {
     { key: "eight_percent_rate", value: "0.08", effectiveFrom: asOf, notes: "8% income tax option rate (RA 10963/TRAIN), in lieu of percentage tax + graduated income tax." },
     { key: "eight_percent_threshold_annual", value: "250000.00", effectiveFrom: asOf, notes: "First P250,000 of gross sales/receipts exempt under the 8% option." },
     { key: "vat_registration_threshold_annual", value: "3000000.00", effectiveFrom: asOf, notes: "Mandatory VAT registration threshold." },
+    // SSS's peso-schedule bracket table and the PhilHealth/Pag-IBIG rates
+    // below are deliberately NOT seeded — no verified current source was
+    // available when this was built (same reasoning as BIR RDO codes); the
+    // bookkeeper maintains sss_contribution_brackets and these keys
+    // (philhealth_rate/philhealth_salary_floor/philhealth_salary_ceiling/
+    // pagibig_rate_ee/pagibig_rate_er/pagibig_salary_cap) before running
+    // payroll. See DECISIONS.md "Payroll subsystem".
   ]);
+}
+
+async function seedWithholdingTaxBrackets() {
+  // Unlike SSS/PhilHealth/Pag-IBIG above, this schedule is written directly
+  // into RA 10963 (TRAIN Law) Sec. 24(A)(2)(a) itself, effective Jan 1,
+  // 2023 — not a revisable circular — so it IS seeded, but still flagged
+  // unverified (lastVerifiedAt left null) pending CPA sign-off, same as
+  // every other seeded rate in this codebase.
+  const asOf = "2023-01-01";
+  await db.insert(withholdingTaxBrackets).values(
+    ANNUAL_WITHHOLDING_TAX_BRACKETS_2023.map((b) => ({
+      minAnnualCompensationCentavos: b.minAnnualCompensationCentavos,
+      maxAnnualCompensationCentavos: b.maxAnnualCompensationCentavos,
+      baseTaxCentavos: b.baseTaxCentavos,
+      excessRate: (Number(b.excessRateNumerator) / Number(b.excessRateDenominator)).toString(),
+      effectiveFrom: asOf,
+      notes: "Sec. 24(A)(2)(a), NIRC as amended by RA 10963 (TRAIN Law) — rates effective Jan 1, 2023. VERIFY against a current BIR issuance before relying on this for payroll.",
+    }))
+  );
 }
 
 async function seedChartOfAccounts(clientId: string): Promise<Record<string, string>> {

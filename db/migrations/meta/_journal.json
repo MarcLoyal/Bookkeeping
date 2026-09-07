@@ -15,6 +15,13 @@
       "when": 1788431542410,
       "tag": "0001_clever_weapon_omega",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788801715308,
+      "tag": "0002_sharp_mongoose",
+      "breakpoints": true
     }
   ]
 }

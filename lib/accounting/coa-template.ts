@@ -46,6 +46,7 @@ export const PH_SME_CHART_OF_ACCOUNTS: AccountTemplateEntry[] = [
   { code: "2040", name: "Withholding Tax Payable — Compensation", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.currentLiabilities },
   { code: "2050", name: "Withholding Tax Payable — Expanded", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.currentLiabilities },
   { code: "2060", name: "SSS/PhilHealth/Pag-IBIG Payable", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.currentLiabilities },
+  { code: "2065", name: "Salaries Payable", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.currentLiabilities },
   { code: "2070", name: "Income Tax Payable", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.currentLiabilities },
   { code: "2080", name: "Loans Payable", type: "liability", normalBalance: "credit", fsLineMapping: FS_LINES.nonCurrentLiabilities },
 

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { pesosToCentavos } from "../../money";
+import { centavos, pesosToCentavos } from "../../money";
 import {
   UnbalancedEntryError,
   assertBalanced,
   buildCashDisbursementLines,
   buildCashReceiptLines,
   buildGeneralJournalLines,
+  buildPayrollRunLines,
   buildPurchaseLines,
   buildReversalLines,
   buildSalesInvoiceLines,
@@ -148,5 +149,72 @@ describe("isDateLocked", () => {
     expect(
       isDateLocked("2026-01-15", [{ ...locks[0], unlockedAt: "2026-02-01T00:00:00Z" }])
     ).toBe(false);
+  });
+});
+
+describe("buildPayrollRunLines", () => {
+  it("aggregates every payslip into one balanced entry", () => {
+    const payslips = [
+      {
+        basicPayCentavos: centavos(20_000_00),
+        overtimePayCentavos: 0n,
+        otherTaxableEarningsCentavos: 0n,
+        deMinimisCentavos: centavos(1_000_00),
+        thirteenthMonthPayCentavos: 0n,
+        sssEmployeeCentavos: centavos(900_00),
+        sssEmployerCentavos: centavos(1_930_00),
+        philhealthEmployeeCentavos: centavos(500_00),
+        philhealthEmployerCentavos: centavos(500_00),
+        pagibigEmployeeCentavos: centavos(100_00),
+        pagibigEmployerCentavos: centavos(200_00),
+        withholdingTaxCentavos: 0n,
+        netPayCentavos: centavos(19_500_00),
+      },
+      {
+        basicPayCentavos: centavos(35_000_00),
+        overtimePayCentavos: 0n,
+        otherTaxableEarningsCentavos: 0n,
+        deMinimisCentavos: 0n,
+        thirteenthMonthPayCentavos: 0n,
+        sssEmployeeCentavos: centavos(900_00),
+        sssEmployerCentavos: centavos(1_930_00),
+        philhealthEmployeeCentavos: centavos(875_00),
+        philhealthEmployerCentavos: centavos(875_00),
+        pagibigEmployeeCentavos: centavos(100_00),
+        pagibigEmployerCentavos: centavos(200_00),
+        withholdingTaxCentavos: centavos(1_843_75),
+        netPayCentavos: centavos(31_281_25),
+      },
+    ];
+
+    const lines = buildPayrollRunLines({
+      salariesExpenseAccountId: "salaries-expense",
+      statutoryContributionsExpenseAccountId: "statutory-expense",
+      withholdingTaxPayableAccountId: "wtax-payable",
+      statutoryPayableAccountId: "statutory-payable",
+      salariesPayableAccountId: "salaries-payable",
+      payslips,
+    });
+
+    expect(() => assertBalanced(lines)).not.toThrow();
+    const byAccount = Object.fromEntries(lines.map((l) => [l.accountId, l]));
+    expect(byAccount["salaries-expense"].debitCentavos).toBe(centavos(56_000_00));
+    expect(byAccount["statutory-expense"].debitCentavos).toBe(centavos(5_635_00));
+    expect(byAccount["wtax-payable"].creditCentavos).toBe(centavos(1_843_75));
+    expect(byAccount["statutory-payable"].creditCentavos).toBe(centavos(9_010_00));
+    expect(byAccount["salaries-payable"].creditCentavos).toBe(centavos(50_781_25));
+  });
+
+  it("throws UnbalancedEntryError with no payslips (all lines zero)", () => {
+    expect(() =>
+      buildPayrollRunLines({
+        salariesExpenseAccountId: "salaries-expense",
+        statutoryContributionsExpenseAccountId: "statutory-expense",
+        withholdingTaxPayableAccountId: "wtax-payable",
+        statutoryPayableAccountId: "statutory-payable",
+        salariesPayableAccountId: "salaries-payable",
+        payslips: [],
+      })
+    ).toThrow(UnbalancedEntryError);
   });
 });

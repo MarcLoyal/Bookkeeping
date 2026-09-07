@@ -10,6 +10,8 @@ import {
   cashReceipts,
   journalEntries,
   journalLines,
+  payrollRuns,
+  payslips,
   periodLocks,
   purchases,
   salesInvoices,
@@ -18,11 +20,13 @@ import {
   buildCashDisbursementLines,
   buildCashReceiptLines,
   buildGeneralJournalLines,
+  buildPayrollRunLines,
   buildPurchaseLines,
   buildReversalLines,
   buildSalesInvoiceLines,
   isDateLocked,
   type LineDraft,
+  type PayslipTotals,
 } from "@/lib/accounting/posting";
 
 export class PeriodLockedError extends Error {
@@ -427,6 +431,92 @@ export async function postGeneralJournal(userId: string, input: GeneralJournalIn
       lines,
       postedBy: userId,
     });
+  });
+}
+
+export type PayrollPayslipInput = PayslipTotals & { employeeId: string; grossTaxableIncomeCentavos: bigint };
+
+export type PayrollRunInput = {
+  clientId: string;
+  runType: "regular" | "thirteenth_month";
+  periodStart: string;
+  periodEnd: string;
+  payDate: string;
+  payslips: PayrollPayslipInput[];
+};
+
+/**
+ * Inserts the run + one payslip row per employee, then posts one aggregated
+ * journal entry (see buildPayrollRunLines) via the General Journal — payroll
+ * isn't one of the standard books of account this app already models (GJ,
+ * CRB, CDB, SJ, PJ), so an accrual entry not tied to a specific cash
+ * movement goes through GJ, same as any other adjusting entry. Actual cash
+ * payout is a separate Cash Disbursement against Salaries Payable (2065),
+ * recorded by the bookkeeper like any other payable.
+ */
+export async function postPayrollRun(userId: string, input: PayrollRunInput): Promise<string> {
+  return withUserContext(userId, async (tx) => {
+    const [salariesExpenseId, statutoryExpenseId, wtaxPayableId, statutoryPayableId, salariesPayableId] = await Promise.all([
+      getAccountIdByCode(tx, input.clientId, "5030"),
+      getAccountIdByCode(tx, input.clientId, "5040"),
+      getAccountIdByCode(tx, input.clientId, "2040"),
+      getAccountIdByCode(tx, input.clientId, "2060"),
+      getAccountIdByCode(tx, input.clientId, "2065"),
+    ]);
+
+    const description = `Payroll ${input.periodStart} to ${input.periodEnd}`;
+    const lines = buildPayrollRunLines({
+      salariesExpenseAccountId: salariesExpenseId,
+      statutoryContributionsExpenseAccountId: statutoryExpenseId,
+      withholdingTaxPayableAccountId: wtaxPayableId,
+      statutoryPayableAccountId: statutoryPayableId,
+      salariesPayableAccountId: salariesPayableId,
+      payslips: input.payslips,
+      memo: description,
+    });
+
+    const runId = crypto.randomUUID();
+    await tx.insert(payrollRuns).values({
+      id: runId,
+      clientId: input.clientId,
+      runType: input.runType,
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+      payDate: input.payDate,
+    });
+
+    await tx.insert(payslips).values(
+      input.payslips.map((p) => ({
+        payrollRunId: runId,
+        employeeId: p.employeeId,
+        basicPayCentavos: p.basicPayCentavos,
+        overtimePayCentavos: p.overtimePayCentavos,
+        otherTaxableEarningsCentavos: p.otherTaxableEarningsCentavos,
+        deMinimisCentavos: p.deMinimisCentavos,
+        thirteenthMonthPayCentavos: p.thirteenthMonthPayCentavos,
+        grossTaxableIncomeCentavos: p.grossTaxableIncomeCentavos,
+        sssEmployeeCentavos: p.sssEmployeeCentavos,
+        sssEmployerCentavos: p.sssEmployerCentavos,
+        philhealthEmployeeCentavos: p.philhealthEmployeeCentavos,
+        philhealthEmployerCentavos: p.philhealthEmployerCentavos,
+        pagibigEmployeeCentavos: p.pagibigEmployeeCentavos,
+        pagibigEmployerCentavos: p.pagibigEmployerCentavos,
+        withholdingTaxCentavos: p.withholdingTaxCentavos,
+        netPayCentavos: p.netPayCentavos,
+      }))
+    );
+
+    const entryId = await postEntry(tx, {
+      clientId: input.clientId,
+      book: "GJ",
+      entryDate: input.payDate,
+      description,
+      lines,
+      postedBy: userId,
+    });
+
+    await tx.update(payrollRuns).set({ journalEntryId: entryId }).where(eq(payrollRuns.id, runId));
+    return entryId;
   });
 }
 

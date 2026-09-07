@@ -199,6 +199,12 @@ Statement / Balance Sheet assembly, so report code never hardcodes an
 account code — only ever a semantic FS line. No BIR form layout was
 invented anywhere in this phase (no forms are rendered yet).
 
+New template entries added later (e.g. `2065 Salaries Payable`, added for
+the payroll subsystem) only apply to clients created afterward — there's no
+backfill mechanism that retroactively adds a new account to an
+already-onboarded client's chart of accounts. A firm onboarded before a
+given account existed needs it added by hand (Chart of Accounts screen).
+
 ## Posting logic simplifications (Phase 1, documented for Phase 2/3 revisit)
 
 - **EWT nets directly against Accounts Payable** on a purchase
@@ -272,6 +278,98 @@ trigger blocks `DELETE` on a posted/reversed entry for every role, including
 the schema owner, which is the whole point. This is expected, not test
 pollution; the throwaway client keeps it fully isolated from the two real
 demo clients' books and reports.
+
+## Payroll subsystem
+
+Phase 3, built for BIR Form 1601-C (monthly remittance of compensation
+withholding tax) and confirmed with the user as a real payroll engine, not
+a manual monthly-total entry field.
+
+**Scope correction made during design.** The "mixed income earner" question
+from the Phase 3 kickoff (a client who is both a compensation earner and a
+business/professional) is about *the client's own* compensation income from
+*someone else's* payroll (reported to them via BIR Form 2316) — unrelated
+to this app's payroll engine, which computes what a client *who is an
+employer* owes on *their own* staff. 1701Q/1701A's mixed-income handling
+will need a small manual "outside compensation income + tax withheld"
+input, not a payroll linkage.
+
+**Schema** (`db/schema/payroll.ts`): `employees` holds only payroll-specific
+attributes, referencing a `contacts` row (type `employee`) for identity —
+same split as purchases/sales referencing a contact rather than duplicating
+its fields. No tax-exemption/dependents field: TRAIN (RA 10963) removed
+personal and additional exemptions from Sec. 24(A) — withholding runs off
+gross taxable compensation alone. `payroll_runs` mirrors `sales_invoices`/
+`purchases`: `journalEntryId` null = draft/not yet posted; no bespoke
+immutability trigger, matching those tables (the linked `journal_entries`
+row is what's actually immutable once posted). `payslips` snapshots every
+computed figure at run time so a later rate change never retroactively
+alters history, same reasoning as invoices freezing their own VAT figures.
+
+**Scope deliberately excluded, by design, not oversight:**
+- **Daily/weekly pay frequencies** — only `monthly`/`semi_monthly` are
+  supported. Daily-rate payroll needs attendance/timekeeping data this app
+  doesn't track; half-building it would silently compute wrong amounts on
+  absences.
+- **Per-benefit-type de minimis ceilings** — one lump `deMinimisCentavos`
+  field per payslip, trusted to the bookkeeper as already within the RR
+  11-2018/RMC ceilings for whatever benefit types it covers. Not validated
+  against those ceilings here.
+- **Minimum Wage Earner status** — a bookkeeper-attested flag
+  (`employees.isMinimumWageEarner`), not computed from a regional
+  wage-order table. This app has no source for current regional minimum
+  wages (the same limitation that blocked RDO codes).
+- **13th month pay combining with other bonuses for the ₱90,000 ceiling** —
+  `lib/tax/thirteenth-month.ts` checks 13th month pay alone against the
+  ceiling (Sec. 32(B)(7)(e), NIRC as amended by RA 10963). This app has no
+  "other benefits" bucket to combine it with.
+
+**Statutory rates — three different resolutions, deliberately:**
+- **SSS** (`sss_contribution_brackets`) ships empty. SSS's own schedule is a
+  frequently-revised, flat-peso-per-bracket circular schedule; no verified
+  current source was reachable from this sandbox (same reasoning as RDO
+  codes). The bookkeeper maintains it.
+- **PhilHealth/Pag-IBIG** reuse the existing `tax_rules` key/value table
+  (new keys: `philhealth_rate`, `philhealth_salary_floor`,
+  `philhealth_salary_ceiling`, `pagibig_rate_ee`, `pagibig_rate_er`,
+  `pagibig_salary_cap`) rather than a bespoke table — both are a flat rate
+  with a floor/ceiling, the same shape `vat_rate`/`eight_percent_rate`
+  already use. Also ships empty; bookkeeper-maintained.
+- **The annual graduated withholding tax schedule**
+  (`withholding_tax_brackets`, `lib/tax/withholding-compensation.ts`) IS
+  seeded (`db/seed.ts`) — unlike the above, it's written directly into RA
+  10963 (TRAIN Law) Sec. 24(A)(2)(a) itself, effective Jan 1, 2023, not a
+  revisable circular. Confident enough to seed, but still flagged
+  unverified (`lastVerifiedAt` left null) pending CPA sign-off, same as
+  every other seeded rate in this codebase. One frequency-agnostic ANNUAL
+  table: the computation annualizes a period's taxable compensation, looks
+  up the bracket, then de-annualizes the tax — mathematically equivalent to
+  BIR's separate per-frequency tables (RR 11-2018) without seeding one
+  table per frequency.
+- Computing a payslip **throws** (`MissingStatutoryRateError`,
+  `NoMatchingSssBracketError`, `NoMatchingWithholdingBracketError`) rather
+  than silently producing a zero deduction if a required rate/bracket isn't
+  configured for the pay date — a wrong silent zero is worse than a loud
+  failure here.
+
+**GL posting** (`buildPayrollRunLines` in `lib/accounting/posting.ts`): one
+aggregated journal entry per run across every payslip — not one line per
+employee; per-employee detail lives in the `payslips` table, not the GL.
+Posted through the General Journal book: payroll isn't one of the standard
+books of account this app already models (GJ, CRB, CDB, SJ, PJ), so an
+accrual entry not tied to a specific cash movement goes through GJ, same as
+any other adjusting entry. Net pay credits a new `2065 Salaries Payable`
+liability rather than cash directly — actual payout is a separate Cash
+Disbursement against it, reusing the existing AP/AR-style
+accrue-then-disburse pattern rather than building a new disbursement flow.
+
+**Not yet built**: UI (employee CRUD, payroll run screens, payslip views,
+an SSS-bracket-table admin editor alongside the existing Tax Rules
+settings page). The engine — schema, RLS, GL posting, and the full
+withholding/SSS/PhilHealth/Pag-IBIG/13th-month computation — is verified
+end-to-end against a real Postgres in `db/__tests__/payroll.test.ts`
+(skips gracefully, rather than failing, if a dev DB hasn't had SSS/
+PhilHealth/Pag-IBIG rates entered yet).
 
 ## Known non-blocking follow-ups
 
