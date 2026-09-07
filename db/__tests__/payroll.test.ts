@@ -58,7 +58,7 @@ describe("payroll engine: employee creation and payroll run posting", () => {
       dateHired: "2024-01-15",
     });
 
-    const entryId = await createPayrollRun(adminUserId, {
+    const { runId, entryId } = await createPayrollRun(adminUserId, {
       clientId: TEST_CLIENT_ID,
       runType: "regular",
       periodStart: "2025-06-01",
@@ -69,7 +69,7 @@ describe("payroll engine: employee creation and payroll run posting", () => {
     expect(entryId).toBeTruthy();
 
     const runs = await listPayrollRuns(adminUserId, TEST_CLIENT_ID);
-    const run = runs.find((r) => r.journalEntryId === entryId);
+    const run = runs.find((r) => r.id === runId);
     expect(run).toBeDefined();
 
     const withPayslips = await getPayrollRunWithPayslips(adminUserId, TEST_CLIENT_ID, run!.id);

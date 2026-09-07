@@ -363,13 +363,45 @@ liability rather than cash directly — actual payout is a separate Cash
 Disbursement against it, reusing the existing AP/AR-style
 accrue-then-disburse pattern rather than building a new disbursement flow.
 
-**Not yet built**: UI (employee CRUD, payroll run screens, payslip views,
-an SSS-bracket-table admin editor alongside the existing Tax Rules
-settings page). The engine — schema, RLS, GL posting, and the full
-withholding/SSS/PhilHealth/Pag-IBIG/13th-month computation — is verified
-end-to-end against a real Postgres in `db/__tests__/payroll.test.ts`
-(skips gracefully, rather than failing, if a dev DB hasn't had SSS/
-PhilHealth/Pag-IBIG rates entered yet).
+The engine — schema, RLS, GL posting, and the full withholding/SSS/
+PhilHealth/Pag-IBIG/13th-month computation — is verified end-to-end
+against a real Postgres in `db/__tests__/payroll.test.ts` (skips
+gracefully, rather than failing, if a dev DB hasn't had SSS/PhilHealth/
+Pag-IBIG rates entered yet).
+
+## Payroll UI
+
+Employees (list + create) and Payroll Runs (list + create + detail) under
+each client, plus the two settings-side pieces the engine needs to
+actually compute anything: an "Add Rule" form on `/settings/tax-rules`
+(generic key/value — the same form that already covers `vat_rate` etc. now
+also covers the new `philhealth_*`/`pagibig_*` keys, no payroll-specific
+code needed there) and a new "SSS Contribution Brackets" table + add-form
+on the same page (SSS's schedule doesn't fit the key/value shape — see
+"Payroll subsystem" above). Both are firm_admin-only, matching the page's
+existing guard; neither supports editing/deleting a row, same reasoning as
+`tax_rules` — a rate change is a new row with its own `effectiveFrom`.
+
+The new-payroll-run form is a client component (not the usual
+FormData-from-`<form>` pattern) because it's a dynamic per-employee table —
+one row of optional amount fields per employee, built from React state and
+submitted as structured JSON, rather than trying to encode a variable
+number of rows into flat FormData field names.
+
+**Bug found and fixed while verifying this against a running instance**:
+`useJsonPost` only called `router.push()` on success, which is a no-op in
+Next's App Router when the target URL is the *same* one the user is
+already on (a page redirecting to itself, like these two settings
+add-forms do) — so a successful submit didn't visibly update the list
+until a manual reload, even though the row was actually saved. Fixed by
+also calling `router.refresh()` unconditionally after `push()`; harmless
+for every other existing form (whose push already goes to a different
+URL and fetches fresh data on its own).
+
+Not yet built: employee/payroll-run editing, a payslip PDF/print layout
+(the detail page is an on-screen table only), and no automatic 13th-month
+computation — the amount is entered per employee, not summed from the
+year's prior payslips.
 
 ## Known non-blocking follow-ups
 

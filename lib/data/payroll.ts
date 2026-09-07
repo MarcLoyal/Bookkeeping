@@ -133,6 +133,38 @@ export async function getActiveSssBrackets(userId: string, asOfDate: string): Pr
   });
 }
 
+/** Every sss_contribution_brackets row, for the admin listing — mirrors listTaxRules. */
+export async function listSssBrackets(userId: string) {
+  return withUserContext(userId, (tx) =>
+    tx.select().from(sssContributionBrackets).orderBy(asc(sssContributionBrackets.effectiveFrom), asc(sssContributionBrackets.minSalaryCentavos))
+  );
+}
+
+export type NewSssBracketInput = {
+  minSalaryCentavos: Centavos;
+  maxSalaryCentavos: Centavos | null;
+  employeeShareCentavos: Centavos;
+  employerShareCentavos: Centavos;
+  ecEmployerShareCentavos: Centavos;
+  effectiveFrom: string;
+  notes?: string;
+};
+
+/** Adds a new SSS bracket row — firm_admin only (enforced by the caller/page). Never edits/deletes an existing row, same reasoning as createTaxRule. */
+export async function createSssBracket(userId: string, input: NewSssBracketInput) {
+  return withUserContext(userId, async (tx) => {
+    await tx.insert(sssContributionBrackets).values({
+      minSalaryCentavos: input.minSalaryCentavos,
+      maxSalaryCentavos: input.maxSalaryCentavos,
+      employeeShareCentavos: input.employeeShareCentavos,
+      employerShareCentavos: input.employerShareCentavos,
+      ecEmployerShareCentavos: input.ecEmployerShareCentavos,
+      effectiveFrom: input.effectiveFrom,
+      notes: input.notes || "",
+    });
+  });
+}
+
 /** The annual graduated withholding tax schedule as of `asOfDate` (seeded — see lib/tax/withholding-compensation.ts). */
 export async function getActiveWithholdingBrackets(userId: string, asOfDate: string): Promise<WithholdingTaxBracket[]> {
   return withUserContext(userId, async (tx) => {
@@ -246,7 +278,7 @@ export type CreatePayrollRunInput = {
  * statutory contributions that run — see db/schema/payroll.ts) regardless
  * of what the employee's regular basicPayCentavos is.
  */
-export async function createPayrollRun(userId: string, input: CreatePayrollRunInput): Promise<string> {
+export async function createPayrollRun(userId: string, input: CreatePayrollRunInput): Promise<{ runId: string; entryId: string }> {
   const employeeIds = input.entries.map((e) => e.employeeId);
   const [employeeRows, sssBrackets, withholdingBrackets, rates] = await Promise.all([
     withUserContext(userId, (tx) =>

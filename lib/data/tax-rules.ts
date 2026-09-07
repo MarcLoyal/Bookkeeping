@@ -28,3 +28,22 @@ export async function getCurrentTaxRule(userId: string, key: string, asOfDate?: 
     return row?.value ?? null;
   });
 }
+
+export type NewTaxRuleInput = {
+  key: string;
+  value: string;
+  effectiveFrom: string;
+  notes?: string;
+};
+
+/** Adds a new tax_rules row — firm_admin only (enforced by the caller/page, not here). Never edits/deletes an existing row: a rate change is a new row with its own effectiveFrom, keeping history intact. */
+export async function createTaxRule(userId: string, input: NewTaxRuleInput) {
+  return withUserContext(userId, async (tx) => {
+    await tx.insert(taxRules).values({
+      key: input.key,
+      value: input.value,
+      effectiveFrom: input.effectiveFrom,
+      notes: input.notes || "",
+    });
+  });
+}

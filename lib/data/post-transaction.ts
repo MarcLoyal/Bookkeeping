@@ -454,7 +454,7 @@ export type PayrollRunInput = {
  * payout is a separate Cash Disbursement against Salaries Payable (2065),
  * recorded by the bookkeeper like any other payable.
  */
-export async function postPayrollRun(userId: string, input: PayrollRunInput): Promise<string> {
+export async function postPayrollRun(userId: string, input: PayrollRunInput): Promise<{ runId: string; entryId: string }> {
   return withUserContext(userId, async (tx) => {
     const [salariesExpenseId, statutoryExpenseId, wtaxPayableId, statutoryPayableId, salariesPayableId] = await Promise.all([
       getAccountIdByCode(tx, input.clientId, "5030"),
@@ -516,7 +516,7 @@ export async function postPayrollRun(userId: string, input: PayrollRunInput): Pr
     });
 
     await tx.update(payrollRuns).set({ journalEntryId: entryId }).where(eq(payrollRuns.id, runId));
-    return entryId;
+    return { runId, entryId };
   });
 }
 

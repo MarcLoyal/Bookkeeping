@@ -6,6 +6,8 @@ const TABS = [
   { href: "", label: "Overview" },
   { href: "/accounts", label: "Chart of Accounts" },
   { href: "/contacts", label: "Contacts" },
+  { href: "/employees", label: "Employees" },
+  { href: "/payroll", label: "Payroll" },
   { href: "/transactions", label: "Transactions" },
   { href: "/books/GJ", label: "Books" },
   { href: "/reports/trial-balance", label: "Reports" },
