@@ -5,6 +5,7 @@ import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/lib/accounting/reports";
 import { formatCentavos } from "@/lib/money";
+import { DateOperationsCommencedField } from "./date-operations-commenced-field";
 
 function currentQuarterRange(): { from: string; to: string; label: string } {
   const now = new Date();
@@ -64,6 +65,14 @@ export default async function ClientOverviewPage({ params }: { params: Promise<{
             <dd className="capitalize">{client.booksType.replace("_", " ")}</dd>
             <dt className="text-slate-500">Accounting Method</dt>
             <dd className="capitalize">{client.accountingMethod}</dd>
+            {client.taxpayerType === "corporation" && (
+              <>
+                <dt className="text-slate-500">Operations Commenced</dt>
+                <dd>
+                  <DateOperationsCommencedField clientId={id} value={client.dateOperationsCommenced} />
+                </dd>
+              </>
+            )}
           </dl>
         </div>
 

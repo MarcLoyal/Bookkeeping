@@ -206,6 +206,8 @@ async function seedTaxRules() {
     { key: "ewt_goods_rate", value: "0.01", effectiveFrom: asOf, notes: "ATC WC160 — goods, top withholding agents." },
     { key: "ewt_services_rate", value: "0.02", effectiveFrom: asOf, notes: "ATC WC157 — services, top withholding agents." },
     { key: "eight_percent_rate", value: "0.08", effectiveFrom: asOf, notes: "8% income tax option rate (RA 10963/TRAIN), in lieu of percentage tax + graduated income tax." },
+    { key: "rcit_rate", value: "0.25", effectiveFrom: asOf, notes: "Regular Corporate Income Tax, Sec. 27(A) NIRC as amended by RA 11534 (CREATE Act). This is the general/non-MSME rate — domestic corporations with net taxable income <= P5M AND total assets <= P100M (excluding land) qualify for 20% instead (this app can't auto-determine that: land isn't broken out from Property & Equipment in the chart of accounts). VERIFY MSME eligibility per client before filing; override this value or the form's own rate line as needed." },
+    { key: "mcit_rate", value: "0.02", effectiveFrom: asOf, notes: "Minimum Corporate Income Tax, Sec. 27(E) NIRC as amended by RA 11534 (CREATE Act). CREATE's temporary 1% reduction (Jul 1 2020 - Jun 30 2023) has expired; verify this reads 2% for any current filing." },
     { key: "eight_percent_threshold_annual", value: "250000.00", effectiveFrom: asOf, notes: "First P250,000 of gross sales/receipts exempt under the 8% option." },
     { key: "vat_registration_threshold_annual", value: "3000000.00", effectiveFrom: asOf, notes: "Mandatory VAT registration threshold." },
     // SSS's peso-schedule bracket table and the PhilHealth/Pag-IBIG rates
