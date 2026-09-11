@@ -14,9 +14,11 @@ export default async function DashboardPage() {
     redirect(`/clients/${user.clientId}`);
   }
 
-  const { clients, draftCount } = await getFirmDashboardStats(user.id);
+  const [{ clients, draftCount }, recentActivity] = await Promise.all([
+    getFirmDashboardStats(user.id),
+    user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
+  ]);
   const active = clients.filter((c) => c.status === "active").length;
-  const recentActivity = user.role === "firm_admin" ? await listRecentAuditLog(user.id, 8) : [];
 
   return (
     <div className="space-y-6">
