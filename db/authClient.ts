@@ -21,5 +21,8 @@ if (!connectionString) {
   throw new Error("MIGRATION_DATABASE_URL is not set.");
 }
 
-const authQueryClient = postgres(connectionString, { max: 2 });
+// prepare: false — see db/client.ts; Supabase's pooler can serve stale
+// results from a server-side prepared statement, which would be a bad way
+// to find that out on the login path.
+const authQueryClient = postgres(connectionString, { max: 2, prepare: false });
 export const authDb = drizzle(authQueryClient, { schema });

@@ -44,7 +44,12 @@ async function main() {
     throw new Error("MIGRATION_DATABASE_URL is not set.");
   }
 
-  const migrationClient = postgres(connectionString, { max: 1 });
+  // prepare: false — required through Supabase's connection pooler (Supavisor).
+  // Server-side prepared statements can be cached against stale backend/plan
+  // state on a pooled connection, causing correct-looking queries to return
+  // stale results (observed: a SELECT that a fresh connection saw correctly
+  // returned nothing here, inside this same long-lived migration session).
+  const migrationClient = postgres(connectionString, { max: 1, prepare: false });
   const db = drizzle(migrationClient);
 
   console.log(`Ensuring the ${APP_ROLE} role exists...`);

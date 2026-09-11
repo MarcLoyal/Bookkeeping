@@ -13,7 +13,13 @@ if (!connectionString) {
 // One pooled connection for app queries. RLS is enforced per-request via
 // withUserContext() below, which sets the session-local app.current_user_id
 // that our RLS policies read (see db/sql/001_functions_triggers_rls.sql).
-const queryClient = postgres(connectionString, { max: 10 });
+//
+// prepare: false — required when DATABASE_URL points at a PgBouncer-style
+// pooler (e.g. Supabase's Transaction pooler in production): consecutive
+// queries on one logical connection can land on different backend
+// connections, so a server-side prepared statement can silently miss or
+// return stale results. Harmless against a direct (unpooled) Postgres too.
+const queryClient = postgres(connectionString, { max: 10, prepare: false });
 
 export const db = drizzle(queryClient, { schema });
 
