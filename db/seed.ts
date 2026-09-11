@@ -40,7 +40,8 @@ if (!connectionString) throw new Error("MIGRATION_DATABASE_URL is not set.");
 
 // Seeds as the schema-owning role, deliberately bypassing RLS — equivalent
 // to running a trusted admin/seed script with a Supabase service_role key.
-const client = postgres(connectionString, { max: 1 });
+// prepare: false — see db/client.ts; this can run against Supabase's pooler.
+const client = postgres(connectionString, { max: 1, prepare: false });
 const db = drizzle(client, { schema });
 
 // Deterministic PRNG so `pnpm seed` produces the same demo data every time.
