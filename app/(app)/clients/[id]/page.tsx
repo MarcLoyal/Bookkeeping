@@ -22,17 +22,19 @@ function currentQuarterRange(): { from: string; to: string; label: string } {
 export default async function ClientOverviewPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireCurrentUser();
   const { id } = await params;
-  const client = await getClient(user.id, id);
+  const { from, to, label } = currentQuarterRange();
+  const [client, accts, lines, qtdLines] = await Promise.all([
+    getClient(user.id, id),
+    listAccounts(user.id, id),
+    listPostedLinesForReport(user.id, id, undefined, to),
+    listPostedLinesForReport(user.id, id, from, to),
+  ]);
   if (!client) return null; // layout already 404s
 
-  const accts = await listAccounts(user.id, id);
-  const { from, to, label } = currentQuarterRange();
-  const lines = await listPostedLinesForReport(user.id, id, undefined, to);
   const tb = buildTrialBalance(accts, lines);
   const is = buildIncomeStatement(tb);
   const bs = buildBalanceSheet(tb, is);
 
-  const qtdLines = await listPostedLinesForReport(user.id, id, from, to);
   const qtdTb = buildTrialBalance(accts, qtdLines);
   const qtdIs = buildIncomeStatement(qtdTb);
 
