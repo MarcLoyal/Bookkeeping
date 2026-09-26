@@ -113,10 +113,7 @@ export default async function DashboardPage() {
               <ul className="divide-y divide-slate-100">
                 {recentActivity.map((a) => (
                   <li key={a.id} className="px-4 py-3 text-sm">
-                    <div className="text-slate-900">
-                      <span className="font-medium capitalize">{a.action.toLowerCase()}</span>{" "}
-                      <span className="text-slate-700">{a.tableName.replace(/_/g, " ")}</span>
-                    </div>
+                    <div className={a.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : "text-slate-900"}>{a.description}</div>
                     <div className="mt-0.5 text-xs text-slate-600">
                       {a.actorName} · {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}
                     </div>

@@ -9,8 +9,10 @@ export default async function AuditLogPage() {
     <div>
       <h2 className="text-lg font-semibold">Audit Log</h2>
       <p className="mt-1 text-sm text-slate-500">
-        Every mutation across the firm — actor, timestamp, table, and record id (rule #4). Populated by a database
-        trigger, so it cannot be skipped by application code. Most recent {rows.length} entries.
+        Every sign-in and data change across the firm — actor, timestamp, and what happened (rule #4). Data changes
+        are populated by a database trigger and sign-in events by the login flow itself, so neither can be skipped by
+        forgetting to call a logging helper. Visible to firm admins and reviewers only, and only for this firm. Most
+        recent {rows.length} entries.
       </p>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -19,30 +21,28 @@ export default async function AuditLogPage() {
             <tr>
               <th className="px-4 py-2">When</th>
               <th className="px-4 py-2">Actor</th>
-              <th className="px-4 py-2">Action</th>
+              <th className="px-4 py-2">What happened</th>
               <th className="px-4 py-2">Table</th>
               <th className="px-4 py-2">Record</th>
-              <th className="px-4 py-2">Reason</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((r) => (
-              <tr key={r.id}>
+              <tr key={r.id} className={r.action === "LOGIN_FAILED" ? "bg-amber-50" : undefined}>
                 <td className="px-4 py-2 text-xs text-slate-500">{r.createdAt.toISOString().replace("T", " ").slice(0, 19)}</td>
                 <td className="px-4 py-2">
                   {r.actorName}
                   <span className="ml-1 text-xs text-slate-400">{r.actorEmail}</span>
                 </td>
-                <td className="px-4 py-2 font-mono text-xs uppercase">{r.action}</td>
-                <td className="px-4 py-2 font-mono text-xs">{r.tableName}</td>
+                <td className={`px-4 py-2 ${r.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : ""}`}>{r.description}</td>
+                <td className="px-4 py-2 font-mono text-xs text-slate-500">{r.tableName}</td>
                 <td className="px-4 py-2 font-mono text-xs text-slate-500">{r.recordId.slice(0, 8)}…</td>
-                <td className="px-4 py-2 text-xs text-slate-500">{r.reason ?? "—"}</td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
-                  No mutations logged yet — actions taken through the app will show up here.
+                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                  No activity logged yet — sign-ins and actions taken through the app will show up here.
                 </td>
               </tr>
             )}
