@@ -1,7 +1,7 @@
 import "server-only";
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
-import { journalEntries, purchases, salesInvoices } from "@/db/schema";
+import { contacts, journalEntries, purchases, salesInvoices } from "@/db/schema";
 
 export type SalesTotals = {
   vatableSalesCentavos: bigint;
@@ -59,6 +59,98 @@ export async function getEwtWithheldByCustomerTotal(userId: string, clientId: st
       );
     return rows.reduce((sum, r) => sum + r.ewtWithheldByCustomerCentavos, 0n);
   });
+}
+
+export type SalesInvoiceListRow = {
+  invoiceDate: string;
+  invoiceNo: string;
+  contactName: string;
+  contactTin: string | null;
+  contactAddress: string | null;
+  vatableSalesCentavos: bigint;
+  zeroRatedSalesCentavos: bigint;
+  exemptSalesCentavos: bigint;
+  outputVatCentavos: bigint;
+  totalCentavos: bigint;
+};
+
+/** One row per posted sales invoice in the period, with customer identity — for the Summary List of Sales reference report. */
+export async function listSalesInvoicesForPeriod(userId: string, clientId: string, from: string, to: string): Promise<SalesInvoiceListRow[]> {
+  return withUserContext(userId, (tx) =>
+    tx
+      .select({
+        invoiceDate: salesInvoices.invoiceDate,
+        invoiceNo: salesInvoices.invoiceNo,
+        contactName: contacts.registeredName,
+        contactTin: contacts.tin,
+        contactAddress: contacts.address,
+        vatableSalesCentavos: salesInvoices.vatableSalesCentavos,
+        zeroRatedSalesCentavos: salesInvoices.zeroRatedSalesCentavos,
+        exemptSalesCentavos: salesInvoices.exemptSalesCentavos,
+        outputVatCentavos: salesInvoices.outputVatCentavos,
+        totalCentavos: salesInvoices.totalCentavos,
+      })
+      .from(salesInvoices)
+      .innerJoin(journalEntries, eq(salesInvoices.journalEntryId, journalEntries.id))
+      .innerJoin(contacts, eq(salesInvoices.contactId, contacts.id))
+      .where(
+        and(
+          eq(salesInvoices.clientId, clientId),
+          eq(journalEntries.status, "posted"),
+          gte(salesInvoices.invoiceDate, from),
+          lte(salesInvoices.invoiceDate, to)
+        )
+      )
+      .orderBy(asc(salesInvoices.invoiceDate))
+  );
+}
+
+export type PurchaseListRow = {
+  invoiceDate: string;
+  supplierInvoiceNo: string;
+  contactName: string;
+  contactTin: string | null;
+  contactAddress: string | null;
+  vatablePurchaseCentavos: bigint;
+  exemptPurchaseCentavos: bigint;
+  zeroRatedPurchaseCentavos: bigint;
+  inputVatCentavos: bigint;
+  ewtCode: string | null;
+  ewtAmountCentavos: bigint;
+  totalCentavos: bigint;
+};
+
+/** One row per posted purchase in the period, with supplier identity — for the Summary List of Purchases reference report. Includes every posted purchase, not just EWT-withheld ones (that subset is the separate Alphalist of Payees report). */
+export async function listPurchasesForPeriod(userId: string, clientId: string, from: string, to: string): Promise<PurchaseListRow[]> {
+  return withUserContext(userId, (tx) =>
+    tx
+      .select({
+        invoiceDate: purchases.invoiceDate,
+        supplierInvoiceNo: purchases.supplierInvoiceNo,
+        contactName: contacts.registeredName,
+        contactTin: contacts.tin,
+        contactAddress: contacts.address,
+        vatablePurchaseCentavos: purchases.vatablePurchaseCentavos,
+        exemptPurchaseCentavos: purchases.exemptPurchaseCentavos,
+        zeroRatedPurchaseCentavos: purchases.zeroRatedPurchaseCentavos,
+        inputVatCentavos: purchases.inputVatCentavos,
+        ewtCode: purchases.ewtCode,
+        ewtAmountCentavos: purchases.ewtAmountCentavos,
+        totalCentavos: purchases.totalCentavos,
+      })
+      .from(purchases)
+      .innerJoin(journalEntries, eq(purchases.journalEntryId, journalEntries.id))
+      .innerJoin(contacts, eq(purchases.contactId, contacts.id))
+      .where(
+        and(
+          eq(purchases.clientId, clientId),
+          eq(journalEntries.status, "posted"),
+          gte(purchases.invoiceDate, from),
+          lte(purchases.invoiceDate, to)
+        )
+      )
+      .orderBy(asc(purchases.invoiceDate))
+  );
 }
 
 export type PurchaseTotals = {

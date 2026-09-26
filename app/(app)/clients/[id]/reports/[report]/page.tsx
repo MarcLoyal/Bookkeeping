@@ -4,10 +4,16 @@ import { requireCurrentUser } from "@/lib/auth/current-user";
 import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { getClient } from "@/lib/data/clients";
-import { getEwtWithheldByCustomerTotal, getPurchaseTotals, getSalesTotals } from "@/lib/data/tax-reports";
-import { getWithholdingByAtcCode } from "@/lib/data/withholding";
+import {
+  getEwtWithheldByCustomerTotal,
+  getPurchaseTotals,
+  getSalesTotals,
+  listPurchasesForPeriod,
+  listSalesInvoicesForPeriod,
+} from "@/lib/data/tax-reports";
+import { getWithholdingByAtcCode, getWithholdingByPayee } from "@/lib/data/withholding";
 import { getCurrentTaxRule } from "@/lib/data/tax-rules";
-import { getActiveWithholdingBrackets } from "@/lib/data/payroll";
+import { getActiveWithholdingBrackets, getAnnualEmployeeCompensationSummary } from "@/lib/data/payroll";
 import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance, type IncomeStatement } from "@/lib/accounting/reports";
 import { buildVatReturnSummary } from "@/lib/tax/vat-return";
 import { buildPercentageTaxSummary } from "@/lib/tax/percentage-tax";
@@ -23,6 +29,10 @@ import { Bir1701AForm } from "./bir-1701a-form";
 import { Bir1702QForm } from "./bir-1702q-form";
 import { Bir1702RtForm } from "./bir-1702rt-form";
 import { isMcitApplicable } from "@/lib/tax/corporate-income-tax";
+import { SummaryListOfSales } from "./summary-list-of-sales";
+import { SummaryListOfPurchases } from "./summary-list-of-purchases";
+import { PayeeAlphalist } from "./payee-alphalist";
+import { EmployeeAlphalist } from "./employee-alphalist";
 
 const REPORT_TITLES: Record<string, string> = {
   "trial-balance": "Trial Balance",
@@ -38,6 +48,10 @@ const REPORT_TITLES: Record<string, string> = {
   "income-tax-annual-form": "Annual Income Tax (BIR Form 1701A)",
   "corp-income-tax-quarterly-form": "Quarterly Income Tax (BIR Form 1702Q)",
   "corp-income-tax-annual-form": "Annual Income Tax (BIR Form 1702-RT)",
+  "summary-list-of-sales": "Summary List of Sales",
+  "summary-list-of-purchases": "Summary List of Purchases",
+  "payee-alphalist": "Monthly Alphalist of Payees (MAP)",
+  "employee-alphalist": "Alphalist of Employees",
 };
 
 const CORE_REPORT_TABS = [
@@ -103,6 +117,13 @@ export default async function ReportPage({
           { slug: "corp-income-tax-annual-form", label: "Corp. Income Tax Annual (BIR Form)" },
         ]
       : []),
+    // Reference listings, not filings — always shown regardless of client
+    // type/regime, even with zero data (a clear empty state rather than
+    // hiding the tab).
+    { slug: "summary-list-of-sales", label: "Summary List of Sales" },
+    { slug: "summary-list-of-purchases", label: "Summary List of Purchases" },
+    { slug: "payee-alphalist", label: "Alphalist of Payees (MAP)" },
+    { slug: "employee-alphalist", label: "Alphalist of Employees" },
   ];
   if (!reportTabs.some((t) => t.slug === report)) notFound();
 
@@ -175,6 +196,10 @@ export default async function ReportPage({
         {report === "income-tax-annual-form" && <IncomeTax1701AFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
         {report === "corp-income-tax-quarterly-form" && <CorpIncomeTax1702QFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
         {report === "corp-income-tax-annual-form" && <CorpIncomeTax1702RtFormReport userId={user.id} client={client} accounts={accounts} from={from} />}
+        {report === "summary-list-of-sales" && <SummaryListOfSalesReport userId={user.id} clientId={id} from={from} to={to} />}
+        {report === "summary-list-of-purchases" && <SummaryListOfPurchasesReport userId={user.id} clientId={id} from={from} to={to} />}
+        {report === "payee-alphalist" && <PayeeAlphalistReport userId={user.id} clientId={id} from={from} to={to} />}
+        {report === "employee-alphalist" && <EmployeeAlphalistReport userId={user.id} clientId={id} from={from} to={to} />}
       </div>
     </div>
   );
@@ -645,6 +670,54 @@ async function CorpIncomeTax1702RtFormReport({
         rcitRate={rcitRate}
         mcitRate={mcitRate}
       />
+    </div>
+  );
+}
+
+async function SummaryListOfSalesReport({ userId, clientId, from, to }: { userId: string; clientId: string; from: string; to: string }) {
+  const rows = await listSalesInvoicesForPeriod(userId, clientId, from, to);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> A reference listing to copy from, not a BIR form replica — labels are plain-English, not official form field names.</span>
+      </TaxReportDisclaimer>
+      <SummaryListOfSales rows={rows} />
+    </div>
+  );
+}
+
+async function SummaryListOfPurchasesReport({ userId, clientId, from, to }: { userId: string; clientId: string; from: string; to: string }) {
+  const rows = await listPurchasesForPeriod(userId, clientId, from, to);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> A reference listing to copy from, not a BIR form replica — labels are plain-English, not official form field names.</span>
+      </TaxReportDisclaimer>
+      <SummaryListOfPurchases rows={rows} />
+    </div>
+  );
+}
+
+async function PayeeAlphalistReport({ userId, clientId, from, to }: { userId: string; clientId: string; from: string; to: string }) {
+  const rows = await getWithholdingByPayee(userId, clientId, from, to);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> Every withheld transaction in this range is listed — no BIR inclusion threshold is applied. Apply the official rules yourself before submission.</span>
+      </TaxReportDisclaimer>
+      <PayeeAlphalist rows={rows} />
+    </div>
+  );
+}
+
+async function EmployeeAlphalistReport({ userId, clientId, from, to }: { userId: string; clientId: string; from: string; to: string }) {
+  const rows = await getAnnualEmployeeCompensationSummary(userId, clientId, from, to);
+  return (
+    <div>
+      <TaxReportDisclaimer>
+        <span className="font-semibold"> A reference listing to copy from, not a BIR form replica. Set the date range to a full calendar year for an actual annual alphalist.</span>
+      </TaxReportDisclaimer>
+      <EmployeeAlphalist rows={rows} />
     </div>
   );
 }
