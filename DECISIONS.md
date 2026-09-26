@@ -550,6 +550,61 @@ consistent with this app's existing book-net-income-is-taxable-income
 simplification. Part V (PEZA/special-law tax relief) isn't reproduced —
 out of scope per "No on PEZA/BOI."
 
+## Reference compliance reports (SLS, SLP, MAP, Alphalist of Employees)
+
+Four additional Reports tabs, distinct from the earlier BIR form replicas:
+plain listings the bookkeeper copies from manually, not attempts to
+reproduce an official form's exact layout (no authentic specimen was
+supplied for any of the four) — plain-English column labels throughout,
+same "computation aid, not an official form" disclaimer banner as every
+other report.
+
+**Always shown, even empty**: unlike the tax-computation tabs (gated on
+taxpayer type/VAT status/regime), all four always appear in the tab bar
+regardless of client type, per explicit instruction — a client with no
+data for the selected range gets a plain "No … in this period" empty
+state rather than a hidden tab.
+
+**Summary List of Sales / Summary of Purchases** (`lib/data/tax-reports.ts`
+`listSalesInvoicesForPeriod`/`listPurchasesForPeriod`): one row per posted
+`sales_invoices`/`purchases` record in range, joined to `contacts` for
+customer/supplier identity — same posted-only + date-range filter every
+other tax report already uses. Purchases includes every posted purchase,
+not just EWT-withheld ones (that subset is the separate MAP report).
+`contacts.tin`/`.address` are nullable — the schema comment already flagged
+this as expected for SLSP (`db/schema/contacts.ts`) — rendered as an amber
+"missing" note rather than a blank cell, so a bookkeeper notices before
+relying on the row.
+
+**Monthly Alphalist of Payees (MAP)** (`lib/data/withholding.ts`
+`getWithholdingByPayee`): almost entirely reuse — groups the same
+`listWithheldPurchases()` rows 1601-EQ's `getWithholdingByAtcCode` already
+uses, just by payee (and ATC code, since one payee can have more than one
+income type in a period) instead of by code alone. Lists every withheld
+transaction in range with **no BIR inclusion threshold applied** — per
+explicit instruction, the bookkeeper applies the official rules themselves
+before submission, this app doesn't track filing thresholds anywhere else
+either.
+
+**Alphalist of Employees** (`lib/data/payroll.ts`
+`getAnnualEmployeeCompensationSummary`): the one genuinely new query — no
+existing function rolls payslips up per-employee across a date range
+(`listPayrollRuns`/`getPayrollRunWithPayslips` are both per-run only).
+Sums every payslip component from posted payroll runs (joined through
+`journal_entries.status = 'posted'`, same immutability convention payroll
+already follows) by pay date in range, per employee. Reports each
+component as stored on the payslip (basic pay, overtime, other taxable
+earnings, de minimis, 13th month pay, gross taxable income, SSS/
+PhilHealth/Pag-IBIG, withholding tax, net pay) rather than deriving a
+"non-taxable compensation" total — the exempt portion of 13th month pay
+isn't separately persisted anywhere this app could sum without inventing
+a number.
+
+**Tenant isolation**: all four reuse the exact same `withUserContext()` /
+RLS path as every other report — no new isolation work, since
+`sales_invoices`, `purchases`, `contacts`, `employees`, and `payslips`
+already had firm/client-scoped RLS policies from Phase 1/3.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
-import { contacts, employees, payrollRuns, payslips, sssContributionBrackets, withholdingTaxBrackets } from "@/db/schema";
+import { contacts, employees, journalEntries, payrollRuns, payslips, sssContributionBrackets, withholdingTaxBrackets } from "@/db/schema";
 import { parseRateFraction, pesosToCentavos, type Centavos } from "@/lib/money";
 import { getCurrentTaxRule } from "./tax-rules";
 import { postPayrollRun as postPayrollRunEntry, type PayrollPayslipInput } from "./post-transaction";
@@ -362,5 +362,118 @@ export async function getPayrollRunWithPayslips(userId: string, clientId: string
       .where(eq(payslips.payrollRunId, runId))
       .orderBy(asc(contacts.registeredName));
     return { run, payslips: rows };
+  });
+}
+
+export type EmployeeCompensationSummaryRow = {
+  employeeId: string;
+  registeredName: string;
+  tin: string | null;
+  address: string | null;
+  position: string | null;
+  dateHired: string;
+  dateSeparated: string | null;
+  basicPayCentavos: bigint;
+  overtimePayCentavos: bigint;
+  otherTaxableEarningsCentavos: bigint;
+  deMinimisCentavos: bigint;
+  thirteenthMonthPayCentavos: bigint;
+  grossTaxableIncomeCentavos: bigint;
+  sssEmployeeCentavos: bigint;
+  philhealthEmployeeCentavos: bigint;
+  pagibigEmployeeCentavos: bigint;
+  withholdingTaxCentavos: bigint;
+  netPayCentavos: bigint;
+};
+
+/**
+ * Sums every payslip from posted payroll runs (by pay date) in the range,
+ * per employee — for the Alphalist of Employees reference report. No
+ * existing query does this: listPayrollRuns/getPayrollRunWithPayslips are
+ * both per-run, never rolled up across a year per employee. Reports each
+ * compensation component as stored on the payslip (basic pay, overtime,
+ * other taxable earnings, de minimis, 13th month pay, gross taxable
+ * income, statutory deductions, withholding tax, net pay) rather than
+ * deriving a "non-taxable compensation" total, since the exempt portion of
+ * 13th month pay isn't separately stored anywhere this app could sum.
+ */
+export async function getAnnualEmployeeCompensationSummary(
+  userId: string,
+  clientId: string,
+  from: string,
+  to: string
+): Promise<EmployeeCompensationSummaryRow[]> {
+  return withUserContext(userId, async (tx) => {
+    const rows = await tx
+      .select({
+        employeeId: payslips.employeeId,
+        registeredName: contacts.registeredName,
+        tin: contacts.tin,
+        address: contacts.address,
+        position: employees.position,
+        dateHired: employees.dateHired,
+        dateSeparated: employees.dateSeparated,
+        basicPayCentavos: payslips.basicPayCentavos,
+        overtimePayCentavos: payslips.overtimePayCentavos,
+        otherTaxableEarningsCentavos: payslips.otherTaxableEarningsCentavos,
+        deMinimisCentavos: payslips.deMinimisCentavos,
+        thirteenthMonthPayCentavos: payslips.thirteenthMonthPayCentavos,
+        grossTaxableIncomeCentavos: payslips.grossTaxableIncomeCentavos,
+        sssEmployeeCentavos: payslips.sssEmployeeCentavos,
+        philhealthEmployeeCentavos: payslips.philhealthEmployeeCentavos,
+        pagibigEmployeeCentavos: payslips.pagibigEmployeeCentavos,
+        withholdingTaxCentavos: payslips.withholdingTaxCentavos,
+        netPayCentavos: payslips.netPayCentavos,
+      })
+      .from(payslips)
+      .innerJoin(payrollRuns, eq(payslips.payrollRunId, payrollRuns.id))
+      .innerJoin(employees, eq(payslips.employeeId, employees.id))
+      .innerJoin(contacts, eq(employees.contactId, contacts.id))
+      .innerJoin(journalEntries, eq(payrollRuns.journalEntryId, journalEntries.id))
+      .where(
+        and(
+          eq(payrollRuns.clientId, clientId),
+          eq(journalEntries.status, "posted"),
+          gte(payrollRuns.payDate, from),
+          lte(payrollRuns.payDate, to)
+        )
+      );
+
+    const byEmployee = new Map<string, EmployeeCompensationSummaryRow>();
+    for (const r of rows) {
+      const existing = byEmployee.get(r.employeeId) ?? {
+        employeeId: r.employeeId,
+        registeredName: r.registeredName,
+        tin: r.tin,
+        address: r.address,
+        position: r.position,
+        dateHired: r.dateHired,
+        dateSeparated: r.dateSeparated,
+        basicPayCentavos: 0n,
+        overtimePayCentavos: 0n,
+        otherTaxableEarningsCentavos: 0n,
+        deMinimisCentavos: 0n,
+        thirteenthMonthPayCentavos: 0n,
+        grossTaxableIncomeCentavos: 0n,
+        sssEmployeeCentavos: 0n,
+        philhealthEmployeeCentavos: 0n,
+        pagibigEmployeeCentavos: 0n,
+        withholdingTaxCentavos: 0n,
+        netPayCentavos: 0n,
+      };
+      existing.basicPayCentavos += r.basicPayCentavos;
+      existing.overtimePayCentavos += r.overtimePayCentavos;
+      existing.otherTaxableEarningsCentavos += r.otherTaxableEarningsCentavos;
+      existing.deMinimisCentavos += r.deMinimisCentavos;
+      existing.thirteenthMonthPayCentavos += r.thirteenthMonthPayCentavos;
+      existing.grossTaxableIncomeCentavos += r.grossTaxableIncomeCentavos;
+      existing.sssEmployeeCentavos += r.sssEmployeeCentavos;
+      existing.philhealthEmployeeCentavos += r.philhealthEmployeeCentavos;
+      existing.pagibigEmployeeCentavos += r.pagibigEmployeeCentavos;
+      existing.withholdingTaxCentavos += r.withholdingTaxCentavos;
+      existing.netPayCentavos += r.netPayCentavos;
+      byEmployee.set(r.employeeId, existing);
+    }
+    return [...byEmployee.values()].sort((a, b) => a.registeredName.localeCompare(b.registeredName));
   });
 }

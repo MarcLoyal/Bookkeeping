@@ -65,6 +65,48 @@ export async function getWithholdingByAtcCode(userId: string, clientId: string, 
   return [...byCode.values()].sort((a, b) => a.atcCode.localeCompare(b.atcCode));
 }
 
+export type PayeeWithholdingRow = {
+  contactId: string;
+  contactName: string;
+  contactTin: string | null;
+  contactAddress: string | null;
+  atcCode: string;
+  taxBaseCentavos: bigint;
+  taxWithheldCentavos: bigint;
+};
+
+/**
+ * Groups withheld purchases by payee (one row per payee per ATC code, since
+ * a single payee can have more than one income-payment type in a period) —
+ * for the Monthly Alphalist of Payees (MAP) reference report. Every
+ * withheld transaction in the range is included; no BIR inclusion
+ * threshold is applied — the bookkeeper applies those rules themselves
+ * before filing.
+ */
+export async function getWithholdingByPayee(userId: string, clientId: string, from: string, to: string): Promise<PayeeWithholdingRow[]> {
+  const rows = await listWithheldPurchases(userId, clientId, from, to);
+  const byPayeeAndCode = new Map<string, PayeeWithholdingRow>();
+  for (const r of rows) {
+    const code = (r.ewtCode ?? "").toUpperCase().trim();
+    const key = `${r.contactId}::${code}`;
+    const existing = byPayeeAndCode.get(key) ?? {
+      contactId: r.contactId,
+      contactName: r.contactName,
+      contactTin: r.contactTin,
+      contactAddress: r.contactAddress,
+      atcCode: code,
+      taxBaseCentavos: 0n,
+      taxWithheldCentavos: 0n,
+    };
+    existing.taxBaseCentavos += r.vatablePurchaseCentavos;
+    existing.taxWithheldCentavos += r.ewtAmountCentavos;
+    byPayeeAndCode.set(key, existing);
+  }
+  return [...byPayeeAndCode.values()].sort(
+    (a, b) => a.contactName.localeCompare(b.contactName) || a.atcCode.localeCompare(b.atcCode)
+  );
+}
+
 export type WithholdingCertificateRow = {
   atcCode: string;
   /** Income payment (tax base) bucketed by calendar month (1-12) within the requested period, for BIR Form 2307's "1st/2nd/3rd Month of the Quarter" columns. */
