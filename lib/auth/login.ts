@@ -4,7 +4,7 @@ import { z } from "zod";
 import { authDb } from "@/db/authClient";
 import { auditLog, users } from "@/db/schema";
 import { verifyPassword } from "./password";
-import { createSession, destroySession } from "./session";
+import { createSession, destroySession, getSessionClaims } from "./session";
 
 export const loginSchema = z.object({
   email: z.string().email(),
@@ -24,12 +24,25 @@ export async function login(input: unknown): Promise<LoginResult> {
   // the app allowed to look up a user by email before a session exists.
   const [row] = await authDb.select().from(users).where(eq(users.email, email)).limit(1);
 
-  if (!row || !row.active) {
+  // No row at all: don't log anything — there's no user to attribute a
+  // failed attempt to (and no firm for that firm's audit trail to scope
+  // it to), so this is typo/bot noise, not a firm-relevant security event.
+  if (!row) {
+    return { ok: false, error: "Invalid email or password." };
+  }
+
+  if (!row.active) {
+    await authDb
+      .insert(auditLog)
+      .values({ actorUserId: row.id, action: "LOGIN_FAILED", tableName: "users", recordId: row.id, reason: "Account inactive" });
     return { ok: false, error: "Invalid email or password." };
   }
 
   const valid = await verifyPassword(password, row.passwordHash);
   if (!valid) {
+    await authDb
+      .insert(auditLog)
+      .values({ actorUserId: row.id, action: "LOGIN_FAILED", tableName: "users", recordId: row.id, reason: "Incorrect password" });
     return { ok: false, error: "Invalid email or password." };
   }
 
@@ -42,5 +55,13 @@ export async function login(input: unknown): Promise<LoginResult> {
 }
 
 export async function logout(): Promise<void> {
+  // Read the session's claims before destroying it, so the logout event can
+  // still be attributed to the right user.
+  const claims = await getSessionClaims();
+  if (claims) {
+    await authDb
+      .insert(auditLog)
+      .values({ actorUserId: claims.userId, action: "LOGOUT", tableName: "users", recordId: claims.userId });
+  }
   await destroySession();
 }

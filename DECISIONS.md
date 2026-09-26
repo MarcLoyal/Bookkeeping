@@ -605,6 +605,42 @@ RLS path as every other report — no new isolation work, since
 `sales_invoices`, `purchases`, `contacts`, `employees`, and `payslips`
 already had firm/client-scoped RLS policies from Phase 1/3.
 
+## Audit trail: sign-in events, failed logins, plain-English descriptions
+
+Phase 0 of a larger real-multi-tenancy effort (Auth migration to Supabase
+Auth and self-serve firm signup are separate, later phases — not started
+here). Before touching anything, audited what the audit trail actually
+already did: it was already firm-isolated by RLS for any number of firms
+(`audit_log_select` scopes to `actor_user_id`'s firm matching the caller's
+firm — not hardcoded to the one demo firm), and `lib/auth/login.ts`
+already logged successful logins. So this phase is narrower than it might
+sound — three additions, not a rebuild:
+
+- **Logout logging** (`lib/auth/login.ts#logout`): reads the session's
+  claims before destroying the cookie, so the event is still attributable.
+- **Failed-login logging**: only when the email matches a real user (wrong
+  password, or an inactive account attempting to sign in) — an unknown
+  email isn't logged at all, since there's no user (and so no firm) to
+  attribute it to, and logging every typo/bot hit against the login form
+  would be noise, not a firm-relevant security signal. Uses `audit_log`'s
+  existing `reason` column, previously unused.
+- **Plain-English descriptions** (`lib/audit-log-labels.ts`,
+  `describeAuditEntry()`): a pure, unit-tested function turning
+  action+table+before/after into a sentence ("Signed in", "Role changed:
+  bookkeeper → reviewer", "Created sales invoice") instead of raw
+  `UPDATE users`. Deliberately narrow — only login/logout/failed-login and
+  a `users`-table role/active-flag diff get special-cased; everything else
+  falls back to "Created/Updated/Deleted <table>". Role changes were
+  already captured by the existing `audit_users` trigger (before/after
+  JSON) — this only makes that diff legible, no new logging path.
+- Reads `before`/`after` JSONB in `lib/data/audit-log.ts` to compute the
+  description server-side, then **discards them** — never returns raw
+  JSON to a client component, since a `users` row's `before`/`after`
+  includes `password_hash`.
+- Failed-login rows get a distinct amber treatment on both the Audit Log
+  page and the dashboard's Recent Activity preview, so a firm admin
+  notices them without reading every row.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
