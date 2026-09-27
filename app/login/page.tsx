@@ -6,12 +6,12 @@ import { LoginForm } from "./login-form";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ reset?: string }>;
+  searchParams: Promise<{ reset?: string; oauth_error?: string }>;
 }) {
   const user = await getCurrentUser();
   if (user) redirect("/dashboard");
 
-  const { reset } = await searchParams;
+  const { reset, oauth_error: oauthError } = await searchParams;
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-50 px-4">
@@ -34,6 +34,16 @@ export default async function LoginPage({
         {reset && (
           <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
             Your password has been reset. Sign in with your new password.
+          </p>
+        )}
+        {oauthError === "inactive" && (
+          <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            This account has been deactivated. Contact your firm admin for access.
+          </p>
+        )}
+        {oauthError === "1" && (
+          <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            Something went wrong signing in with Google. Please try again.
           </p>
         )}
         <LoginForm />

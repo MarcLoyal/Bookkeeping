@@ -853,6 +853,108 @@ the module, not a `pnpm test` unit test (matches this codebase's existing
 precedent of not unit-testing the other auth schemas directly, e.g.
 `resetPasswordSchema`).
 
+## Phase 3 of real multi-tenancy: Google Sign-In
+
+Google Sign-In using Supabase Auth's OAuth provider support, built on top
+of Phase 1's migration to real Supabase Auth (`lib/auth/supabase-server.ts`,
+`middleware.ts`'s session-refresh pattern) — no schema changes, since
+`public.users.id` already just has to equal `auth.users.id` regardless of
+which provider created that identity.
+
+**A second, different OAuth pattern, not a variant of the existing one**:
+`app/auth/confirm/route.ts` (Phase 1, password reset) uses Supabase's
+email-link/OTP pattern — `verifyOtp({type, token_hash})` against a
+`token_hash` query param. Google's flow is PKCE — a `code` query param
+exchanged via `exchangeCodeForSession(code)` — a different Supabase API
+entirely, so this is a new route (`app/auth/callback/route.ts`), not a
+branch added to the existing one.
+
+**`signInWithOAuth()` has to run client-side**: it redirects the browser
+itself to Google's consent screen, which a Server Action can't do (it can
+only return a redirect *response*, not navigate the browser to a
+different origin mid-request in the way this needs). This is the one auth
+flow in the app that needs a browser-side Supabase client
+(`lib/auth/supabase-browser.ts`, `createBrowserClient`) — every other
+flow (password login, signup, reset) posts to a Server Action and never
+needed one.
+
+**One button, both pages, no separate "signup via Google" flow**:
+`signInWithOAuth()` doesn't distinguish login intent from signup intent —
+Supabase creates the Google identity if it's new or signs in an existing
+one either way. `components/auth/google-sign-in-button.tsx` is the same
+component on `/login` and `/signup`; `app/auth/callback/route.ts` is what
+decides afterward whether this is a returning user or a brand-new one
+that needs onboarding.
+
+**Brand-new Google identities don't get an auto-generated firm** (the
+recommended, confirmed design): rather than inventing a firm name like
+"Jane's Firm" or leaving `firms.name` blank, a Google identity that
+authenticates with no matching `public.users` row is redirected to
+`/onboarding/firm` to name their firm and confirm their display name
+(pre-filled from Google's profile via `user_metadata.full_name`/`name`,
+editable — Supabase doesn't guarantee which key a given provider version
+populates, so both are checked with the profile still editable either
+way). Submitting that form calls the same `createFirmForUser()` helper
+email/password signup uses.
+
+**`createFirmForUser()` extracted from `lib/auth/signup.ts`** into
+`lib/auth/create-firm-for-user.ts` — the transaction (insert `firms`,
+insert the first `users` row as `firm_admin`, insert the `SIGNUP` audit
+row) was identical logic needed from two call sites now: email/password
+signup (which creates the Supabase Auth user itself first) and Google
+onboarding (where Supabase Auth already created the user during the OAuth
+callback, so this just finishes the profile). Still bypasses RLS via
+`authDb` for the same reason as before — `users_insert`'s policy requires
+an *existing* `firm_admin` to already be acting, circular for a firm with
+no users yet.
+
+**Distinguishing "hasn't signed up" from "signed in, never finished
+onboarding" from "existing account, deactivated"**: a Google identity
+that authenticates but closes the tab before naming a firm has a real
+Supabase session with no `public.users` row — different from a fresh
+visitor (no session at all) and from an existing but deactivated account
+(has a row, just `active: false`). `lib/auth/current-user.ts`'s new
+`getPendingGoogleSignup()` distinguishes exactly this case, and
+`requireCurrentUser()` now sends that specific case to `/onboarding/firm`
+to resume instead of `/login`, where they'd have no way to finish. A
+deactivated existing account still falls through to `/login` unchanged,
+since it has a profile row (`getCurrentUser()`'s existing `!row.active`
+check).
+
+**Existing users signing in with Google for the first time**: whether
+Supabase auto-links a new Google identity to an existing email/password
+account with the same, verified email (so `sign in with Google` on an
+existing bookkeeper's email lands on their same account) or creates a
+separate identity is controlled by Supabase project-level settings this
+app doesn't control from code — expected/desired behavior per Supabase's
+docs, but unverified against the live project (same sandbox network
+limitation as every other live-auth step this phase). First thing to
+confirm during the live walkthrough, alongside the OAuth redirect itself.
+
+**`middleware.ts`**: `/auth/callback` added to `PUBLIC_PATHS`, same
+reason `/auth/confirm` already was — the request lands with no session
+cookie yet (that's what the route itself is about to establish), so it
+would otherwise get bounced to `/login` before ever running.
+`/onboarding/firm` needed no such change: middleware only gates on
+"is there *any* Supabase session," which a pending Google identity has —
+the page itself (via `getPendingGoogleSignup()`) is what decides whether
+that session belongs there.
+
+**Platform admin role/invite UI**: intentionally out of this PR. Creating
+the first platform admin account and the in-app "invite another admin"
+flow both depend on this Google Sign-In wiring existing first, but are
+being sequenced as separate follow-up work rather than folded in here, to
+keep this change reviewable on its own (per the earlier "no giant change"
+guidance for this whole multi-tenancy effort).
+
+**Verified**: full test suite (116, unchanged — no new pure logic to unit
+test here beyond what Phase 1/2 already cover), `tsc --noEmit`, and
+`pnpm build` (which correctly picked up both new routes,
+`/auth/callback` and `/onboarding/firm`) all pass. The actual OAuth
+redirect round-trip through Google and Supabase is unverified from this
+sandbox (no egress to real Google/Supabase endpoints) — this PR is opened
+as a draft for the same reason Phase 1's was, pending a live walkthrough.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

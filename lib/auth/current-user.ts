@@ -58,8 +58,17 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
 export async function requireCurrentUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  return user;
+  if (user) return user;
+
+  // A Google identity that authenticated but never finished naming a firm
+  // (e.g. they closed the tab mid-onboarding) has a real Supabase session
+  // but no profile row — send them back to finish, not to /login, where
+  // they'd have no way to resume. A deactivated *existing* account still
+  // falls through to /login below, since it has a profile row already.
+  const pending = await getPendingGoogleSignup();
+  if (pending) redirect("/onboarding/firm");
+
+  redirect("/login");
 }
 
 export async function requireStaffUser(): Promise<CurrentUser> {
@@ -72,4 +81,32 @@ export async function requireFirmAdmin(): Promise<CurrentUser> {
   const user = await requireCurrentUser();
   if (user.role !== "firm_admin") redirect("/dashboard");
   return user;
+}
+
+export type PendingGoogleSignup = { id: string; email: string; name: string };
+
+/**
+ * Distinguishes, for a Google identity with no public.users row, "hasn't
+ * signed in yet" from "signed in but hasn't finished naming a firm" — used
+ * by app/onboarding/firm (to gate/prefill the form) and requireCurrentUser
+ * below (to send an incomplete signup there instead of to /login, without
+ * misrouting a deactivated *existing* account the same way).
+ */
+export async function getPendingGoogleSignup(): Promise<PendingGoogleSignup | null> {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+  if (!authUser) return null;
+
+  const hasProfile = await withUserContext(authUser.id, async (tx) => {
+    const [row] = await tx.select({ id: users.id }).from(users).where(eq(users.id, authUser.id)).limit(1);
+    return !!row;
+  });
+  if (hasProfile) return null;
+
+  const metadata = (authUser.user_metadata ?? {}) as Record<string, unknown>;
+  const name = (typeof metadata.full_name === "string" && metadata.full_name) || (typeof metadata.name === "string" && metadata.name) || "";
+
+  return { id: authUser.id, email: authUser.email ?? "", name };
 }

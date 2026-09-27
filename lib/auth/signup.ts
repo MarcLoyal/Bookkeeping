@@ -1,7 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { authDb } from "@/db/authClient";
-import { auditLog, firms, users } from "@/db/schema";
+import { createFirmForUser } from "./create-firm-for-user";
 import { createSupabaseServerClient } from "./supabase-server";
 
 // Kept in sync with the pattern= hints on app/signup/signup-form.tsx's
@@ -33,13 +32,9 @@ export type SignupResult =
   | { ok: false; error: string };
 
 /**
- * Self-serve firm signup: creates a Supabase Auth user, then — in one
- * transaction, on the RLS-bypassing schema-owning connection (see
- * db/authClient.ts) — a new firms row and its first user, role
- * firm_admin. Bypassing RLS here isn't a shortcut: the users_insert
- * policy requires an *existing* firm_admin to already be acting, which is
- * circular for a firm that by definition has no users yet. Every other
- * signed-in path in this app still goes through withUserContext().
+ * Self-serve firm signup: creates a Supabase Auth user, then hands off to
+ * createFirmForUser() to create the firm + first user row (see that file
+ * for why it bypasses RLS).
  *
  * needsEmailConfirmation reflects whether Supabase actually established a
  * session (data.session is set) or the account is pending email
@@ -68,17 +63,7 @@ export async function signUp(input: unknown): Promise<SignupResult> {
   }
 
   try {
-    await authDb.transaction(async (tx) => {
-      const [firm] = await tx.insert(firms).values({ name: firmName }).returning();
-      await tx.insert(users).values({
-        id: data.user!.id,
-        firmId: firm.id,
-        email,
-        name,
-        role: "firm_admin",
-      });
-      await tx.insert(auditLog).values({ actorUserId: data.user!.id, action: "SIGNUP", tableName: "firms", recordId: firm.id });
-    });
+    await createFirmForUser({ userId: data.user.id, email, name, firmName });
   } catch (err) {
     // The Supabase Auth user now exists but has no firm/profile row — a
     // genuine gap, not handled here: retrying signup with the same email

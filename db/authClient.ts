@@ -10,10 +10,13 @@ import * as schema from "./schema";
  * act before any session/tenant RLS context exists — currently:
  * lib/auth/login.ts (looking a user up by email to attribute a failed
  * attempt), lib/auth/password-reset.ts (the PASSWORD_RESET audit row),
- * and lib/auth/signup.ts (creating a brand-new firm + its first
+ * lib/auth/create-firm-for-user.ts (creating a brand-new firm + its first
  * firm_admin — circular to gate behind RLS's `users_insert` policy, which
  * requires an *existing* firm_admin to already be acting, for a firm that
- * by definition has no users yet).
+ * by definition has no users yet — used by both email/password signup and
+ * the Google-sign-in "name your firm" onboarding step), and
+ * lib/auth/oauth-callback.ts (checking whether a just-authenticated Google
+ * identity already has a profile row).
  *
  * Do NOT import this for anything else. Every other query must go through
  * db/client.ts's withUserContext() so RLS is enforced.
