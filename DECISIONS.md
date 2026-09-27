@@ -1603,6 +1603,73 @@ correctly scoping to just that firm's clients. Full test suite (117,
 unchanged), `tsc --noEmit`, and `pnpm build` all pass — no new routes,
 everything lives inside the existing `/dashboard` page for both roles.
 
+## Phase 3: BIR deadlines widget
+
+`/dashboard`'s new first section for bookkeeper/firm_admin/reviewer:
+every active client's current filing obligation, across every applicable
+BIR form, sorted soonest-due first, with overdue/due-soon flagged
+visually. The due-date rules and the "derive from client profile, not
+`client_tax_types`" data-source decision were both confirmed with the
+product owner in a prior planning round, before any of this was written.
+
+**`lib/tax/bir-deadlines.ts`** — new, pure, real vitest coverage (21
+tests) matching this project's existing rigor for `lib/tax/*.ts` (this
+is compliance-relevant date math, not cosmetic UI logic, so it gets the
+same treatment as the VAT/withholding/income-tax modules already tested
+this way — not a lighter-touch standalone script). Two pieces:
+
+- `applicableForms(client)`: which of the 7 confirmed forms a client
+  files, derived from `vatStatus`/`taxpayerType`/`withholdingAgent` —
+  fields captured for every real client at onboarding, unlike
+  `client_tax_types` (see the earlier "does the data model support this"
+  research: that table's own schema comment says it "drives the
+  compliance calendar," but nothing in this app has ever read or written
+  it for a real client, only demo seed data).
+- `currentDeadlineFor(formCode, today, fiscalYearEndMonth)`: the
+  current/nearest obligation for one form. 2550Q/2551Q/1601-EQ are
+  always calendar-quarter based (VAT/percentage/withholding periods
+  don't follow a fiscal year even for a fiscal-year corporation);
+  1701Q/1701A are fixed calendar dates (individuals can't elect a fiscal
+  year under Philippine tax law); 1702Q/1702-RT are fiscal-year-aware,
+  tested against both a calendar (Dec) and a non-calendar (June 30)
+  fiscal year end, including the transition right after each one's own
+  annual close.
+
+**A real, disclosed simplification**: `taxpayerType: "partnership"` is
+treated as filing corporate-type forms (1702Q/1702-RT) — correct for an
+ordinary business partnership, wrong for a General Professional
+Partnership (GPP), which isn't taxed at the entity level at all. This
+app has no field distinguishing the two. Documented in the module's own
+doc comment, not silently assumed away — a GPP is a real but
+comparatively rare case among typical bookkeeping-firm clients.
+
+**What this widget is not**: a record of what's actually been filed.
+This app has no filing-status tracking anywhere on any client — so
+"overdue" here means "the calendar due date has passed," not "confirmed
+not filed." Stated plainly in the widget component's own doc comment.
+Only `status = 'active'` clients are included — onboarding clients may
+not have a finalized tax profile yet, inactive ones are no longer being
+serviced.
+
+**`lib/data/deadlines.ts`**: assembles the flat, sorted list — active
+clients through existing RLS (no new grant; a bookkeeper/reviewer/
+firm_admin already sees exactly the clients they should), each run
+through `applicableForms()` + `currentDeadlineFor()`, sorted by due date.
+
+**Verified end-to-end against real local seed data**, not just unit
+tests in isolation: pulled the 3 seeded clients' actual tax-profile
+columns via `psql`, fed them through the real `applicableForms()`/
+`currentDeadlineFor()` functions in a standalone script, and confirmed
+all 7 expected forms appeared, correctly attributed to the right
+clients, correctly sorted, with the onboarding-status client correctly
+excluded — including a real, naturally-occurring overdue case (a
+corporation's 1702-RT, due back in April, correctly sorting to the top
+as the most overdue item relative to today).
+
+**Verified**: 21 new tests (138 total, up from 117), `tsc --noEmit`,
+`pnpm build` all pass — no new routes, lives inside the existing
+`/dashboard` page.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

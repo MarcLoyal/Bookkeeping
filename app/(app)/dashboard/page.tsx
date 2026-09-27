@@ -3,11 +3,13 @@ import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
+import { listUpcomingDeadlines } from "@/lib/data/deadlines";
 import { getFirmSignupsByWeek, getPlatformStats, listFirmsForDashboard } from "@/lib/data/platform-dashboard";
 import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
+import { DeadlinesWidget } from "./deadlines-widget";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
@@ -77,11 +79,12 @@ export default async function DashboardPage() {
     );
   }
 
-  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts] = await Promise.all([
+  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
     getFirmDashboardStats(user.id),
     user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
     getClientLastActivity(user.id),
     listFirmDrafts(user.id),
+    listUpcomingDeadlines(user.id),
   ]);
   const active = clients.filter((c) => c.status === "active").length;
   const needsAttention = drafts.slice(0, 6);
@@ -102,6 +105,8 @@ export default async function DashboardPage() {
           </div>
         )}
       </div>
+
+      <DeadlinesWidget deadlines={upcomingDeadlines} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Link href="/clients?status=active" className="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
