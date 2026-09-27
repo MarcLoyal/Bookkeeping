@@ -26,6 +26,18 @@ describe("describeAuditEntry", () => {
     );
   });
 
+  it("describes a signup", () => {
+    expect(describeAuditEntry({ action: "SIGNUP", tableName: "firms", before: null, after: null, reason: null })).toBe(
+      "Firm created"
+    );
+  });
+
+  it("describes a password reset", () => {
+    expect(describeAuditEntry({ action: "PASSWORD_RESET", tableName: "users", before: null, after: null, reason: null })).toBe(
+      "Password reset"
+    );
+  });
+
   it("describes a role change on a users row", () => {
     expect(
       describeAuditEntry({
