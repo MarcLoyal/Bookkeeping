@@ -7,16 +7,22 @@ import * as schema from "./schema";
 
 /**
  * A privileged, RLS-bypassing connection reserved for auth flows that must
- * act before any session/tenant RLS context exists — currently:
+ * act before any session/tenant RLS context exists, or that need a
+ * genuinely cross-tenant check no RLS-scoped session could ever correctly
+ * make — currently:
  * lib/auth/login.ts (looking a user up by email to attribute a failed
  * attempt), lib/auth/password-reset.ts (the PASSWORD_RESET audit row),
  * lib/auth/create-firm-for-user.ts (creating a brand-new firm + its first
  * firm_admin — circular to gate behind RLS's `users_insert` policy, which
  * requires an *existing* firm_admin to already be acting, for a firm that
  * by definition has no users yet — used by both email/password signup and
- * the Google-sign-in "name your firm" onboarding step), and
+ * the Google-sign-in "name your firm" onboarding step),
  * lib/auth/oauth-callback.ts (checking whether a just-authenticated Google
- * identity already has a profile row).
+ * identity already has a profile row), and
+ * lib/auth/invite-platform-admin.ts (checking whether an email is already
+ * registered anywhere, across every firm, before inviting it as a platform
+ * admin — the invite's actual profile-row insert still goes through
+ * withUserContext() and normal RLS, only this pre-check bypasses it).
  *
  * Do NOT import this for anything else. Every other query must go through
  * db/client.ts's withUserContext() so RLS is enforced.

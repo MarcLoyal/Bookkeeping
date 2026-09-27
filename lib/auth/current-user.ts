@@ -83,6 +83,12 @@ export async function requireFirmAdmin(): Promise<CurrentUser> {
   return user;
 }
 
+export async function requirePlatformAdmin(): Promise<CurrentUser> {
+  const user = await requireCurrentUser();
+  if (user.role !== "platform_admin") redirect("/dashboard");
+  return user;
+}
+
 export type PendingGoogleSignup = { id: string; email: string; name: string };
 
 /**

@@ -24,7 +24,11 @@ export default async function DashboardPage() {
       <div className="space-y-2">
         <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
         <p className="text-sm text-slate-600">
-          Signed in as {user.name}. There&apos;s no admin dashboard here yet — check back soon.
+          Signed in as {user.name}. No firm-level dashboard applies here —{" "}
+          <Link href="/settings/platform-admins" className="underline">
+            manage platform admins
+          </Link>{" "}
+          from the nav above.
         </p>
       </div>
     );
