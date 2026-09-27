@@ -14,6 +14,22 @@ export default async function DashboardPage() {
     redirect(`/clients/${user.clientId}`);
   }
 
+  // Not scoped to any firm (firmId is NULL) — the firm-scoped queries below
+  // would just return empty for them, which reads as a broken/empty "Firm
+  // Dashboard" rather than the accurate "there's nothing firm-shaped here."
+  // No dedicated admin dashboard yet (see DECISIONS.md) — this placeholder
+  // avoids the misleading empty state until one exists.
+  if (user.role === "platform_admin") {
+    return (
+      <div className="space-y-2">
+        <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
+        <p className="text-sm text-slate-600">
+          Signed in as {user.name}. There&apos;s no admin dashboard here yet — check back soon.
+        </p>
+      </div>
+    );
+  }
+
   const [{ clients, draftCount }, recentActivity] = await Promise.all([
     getFirmDashboardStats(user.id),
     user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),

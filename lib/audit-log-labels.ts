@@ -39,6 +39,7 @@ export function describeAuditEntry(entry: AuditEntryInput): string {
   if (entry.action === "LOGIN_FAILED") return `Failed sign-in attempt${entry.reason ? ` (${entry.reason})` : ""}`;
   if (entry.action === "SIGNUP") return "Firm created";
   if (entry.action === "PASSWORD_RESET") return "Password reset";
+  if (entry.action === "ADMIN_CREATED") return "Platform admin created";
 
   const label = TABLE_LABELS[entry.tableName] ?? entry.tableName;
 
