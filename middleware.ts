@@ -3,6 +3,21 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password", "/auth/confirm", "/auth/callback"];
 
+// Not shared with lib/auth/supabase-server.ts's requireEnv(): that module is
+// guarded by "server-only", and middleware runs in a separate Edge runtime
+// from the rest of the app, so this stays self-contained rather than
+// crossing that boundary for a two-line helper. Reported live: without
+// this, a missing env var here surfaced only as Supabase's own generic
+// "Your project's URL and Key are required to create a Supabase client."
+// (MIDDLEWARE_INVOCATION_FAILED, 500 on every route) — which doesn't name
+// which var is actually missing. This doesn't fix a genuinely missing var,
+// but makes the runtime log say exactly which one it is.
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set.`);
+  return value;
+}
+
 export async function middleware(request: NextRequest) {
   // Supabase's documented Next.js middleware pattern: the response object
   // has to be recreated whenever cookies are set, so both the request (for
@@ -10,7 +25,7 @@ export async function middleware(request: NextRequest) {
   // stay in sync — see https://supabase.com/docs/guides/auth/server-side/nextjs.
   let supabaseResponse = NextResponse.next({ request });
 
-  const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+  const supabase = createServerClient(requireEnv("NEXT_PUBLIC_SUPABASE_URL"), requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
     cookies: {
       getAll() {
         return request.cookies.getAll();

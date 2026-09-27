@@ -1219,6 +1219,53 @@ given the actual fix here is a one-line Vercel dashboard setting rather
 than a code change, it didn't seem worth the added config-file surface
 for a warning easy to keep scrolling past anyway.
 
+## Fix: `middleware.ts` gave a generic error instead of naming the missing var
+
+Reported live, on a *manually-triggered* CLI deployment
+(`npx vercel deploy`, run after confirming Preview-scoped env vars
+existed via `vercel env add`): a 500 (`MIDDLEWARE_INVOCATION_FAILED`) on
+every route, with the runtime log reading `Error: Your project's URL and
+Key are required to create a Supabase client.` — Supabase's own generic
+message, not this app's.
+
+**Answering the direct question ("what does middleware.ts expect?")**:
+the same two vars as everywhere else — `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`. But `middleware.ts` read them
+differently from every other Supabase client in this app:
+`lib/auth/supabase-server.ts` and `lib/auth/supabase-browser.ts` both go
+through a `requireEnv()` guard that throws a specific, named message
+("`NEXT_PUBLIC_SUPABASE_URL` is not set.") *before* ever calling
+`createServerClient()`/`createBrowserClient()`. `middleware.ts` instead
+read `process.env.NEXT_PUBLIC_SUPABASE_URL!` directly with a bare
+non-null assertion — no guard — so a missing/empty value there was
+passed straight into `createServerClient()`, which threw its own
+generic internal message instead. That mismatch in error message is
+exactly why this looked like a *different* problem from the earlier
+"NEXT_PUBLIC_SUPABASE_URL is not set" report, when it may well be the
+same underlying cause surfacing through a different, unguarded code
+path. `middleware.ts` now has its own small `requireEnv()` (not shared
+with `supabase-server.ts`'s, which is gated by `"server-only"` and
+assumes the Node runtime — middleware runs in a separate Edge runtime,
+so this stays self-contained rather than crossing that boundary for a
+two-line helper). This doesn't fix a genuinely missing/empty var — it
+makes the runtime log say exactly which one it is instead of a message
+that doesn't mention env vars at all.
+
+**On the manual CLI deploy itself**: flagged by you as a possible
+factor, and it's a reasonable thing to be suspicious of — `vercel
+deploy` run locally is a different pipeline from the Git-integrated
+build this whole project's testing has otherwise gone through (every
+other live verification this phase used a PR's auto-generated preview).
+Whether Vercel's CLI path resolves Preview-scoped env vars identically
+for Edge Middleware specifically as the Git-integrated path does isn't
+something verifiable from here — no Vercel dashboard/API/log access
+exists in this sandbox. Recommended you fall back to the PR's normal
+Git-integrated preview (a dashboard redeploy with the build cache off,
+or a fresh push) now that the vars are confirmed to exist at the project
+level, rather than continuing to debug the one-off CLI path — that's the
+pipeline actually used going forward anyway (production deploys happen
+via Git push to `main`, not local `vercel deploy`).
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
