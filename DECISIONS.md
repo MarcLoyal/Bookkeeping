@@ -1275,6 +1275,97 @@ specific to the manual CLI deploy pipeline itself, not the env var
 configuration. This commit exists to trigger a fresh Git-integrated
 preview build for PR #22 as the next, cleaner data point.
 
+## Root cause, finally: `requireEnv(name)` broke Next.js's static env inlining
+
+The actual bug, after several rounds of ruling out Vercel configuration
+(scoping, values, cache, even the CLI deploy path itself, all
+conclusively cleared — see `vercel env pull` confirming the real value
+reaches Vercel's own build resolution) — the code was wrong, not Vercel.
+
+**The pattern**: `lib/auth/supabase-browser.ts` and (after an earlier
+"fix" in this same file, made in direct response to a *different* report
+in this same thread) `middleware.ts` both read their env vars through a
+small helper:
+
+```ts
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set.`);
+  return value;
+}
+// called as requireEnv("NEXT_PUBLIC_SUPABASE_URL")
+```
+
+**Why this silently breaks**: Next.js's `NEXT_PUBLIC_*` inlining isn't a
+runtime environment lookup for browser code or Edge Runtime code (Edge
+Middleware included) — both run in restricted, non-Node.js execution
+contexts with no real OS-level `process.env`. Next.js instead does a
+*build-time static text substitution*: it scans the source for the exact
+literal expression `process.env.NEXT_PUBLIC_X` (dot notation, the var
+name a literal identifier right there in the code) and replaces that
+specific expression with the actual value, like a macro. It cannot do
+this for `process.env[name]`, because `name` is a variable — there's no
+way for the bundler to know at build time what string it'll hold. The
+substitution silently doesn't happen; at runtime `process.env` in these
+contexts is empty/undefined, so `process.env[name]` evaluates to
+`undefined` regardless of what was actually configured in Vercel.
+
+This is why every earlier "config" symptom looked real: the value being
+missing from the *shipped code* is indistinguishable from the value
+being missing from *Vercel* purely by testing the app from the outside —
+both produce the exact same "NEXT_PUBLIC_SUPABASE_URL is not set" error.
+It took inspecting the actual compiled output to tell them apart.
+
+**How this was actually found, not just reasoned about**: set fake
+non-empty values locally, ran a real `pnpm build`, and grepped the
+compiled `.next/` output for the fake string. First run (before the
+fix): the fake *value* appeared nowhere in the shipped bundle, but the
+literal *name* `"NEXT_PUBLIC_SUPABASE_URL"` did — as `sP("NEXT_PUBLIC_
+SUPABASE_URL")`, `requireEnv()` minified, called with the var's name as
+an inert string argument. That's the smoking gun: the value never made
+it in, only the name did, exactly matching the "value provably exists in
+Vercel, app still says it's missing" symptom. After rewriting to static
+literal `process.env.NEXT_PUBLIC_X` expressions (below), the same test
+showed the fake value correctly present in both `.next/static/` (the
+browser bundle) and `.next/server/edge/` (the middleware bundle).
+
+**Fix, in all three files that touch these vars**
+(`lib/auth/supabase-browser.ts`, `lib/auth/supabase-server.ts`,
+`middleware.ts`): removed the `requireEnv(name)` indirection entirely,
+replaced with each var read as a literal `process.env.NEXT_PUBLIC_X`
+expression assigned straight to a local, then checked. This is required
+for `supabase-browser.ts` (browser) and `middleware.ts` (Edge Runtime).
+`supabase-server.ts` runs on the Node.js runtime, where `process.env` is
+a real, live, fully dynamic object at request time — its version of this
+pattern was never actually broken (which is exactly why login/signup/
+password-reset all worked fine throughout Phase 1/2, while only the
+Google Sign-In code paths failed) — but it's fixed too, for the same
+reason the helper isn't being kept around anywhere in this codebase:
+it's a footgun that already caused two real bugs when the same pattern
+was copied into contexts where it doesn't work, and a third copy
+elsewhere in the future was a real, foreseeable risk otherwise.
+
+**On my own earlier "fix" making this worse**: the `middleware.ts`
+change made a few turns ago in this same thread — replacing a bare
+`process.env.NEXT_PUBLIC_SUPABASE_URL!` with `requireEnv("NEXT_PUBLIC_
+SUPABASE_URL")` specifically to produce a clearer error message —
+introduced the *exact* dynamic-key bug into a file that hadn't had it
+before. The original bare literal access would have worked correctly
+the moment the env var was genuinely present in Vercel; my change broke
+that, so every subsequent test (including the one right after
+confirming the vars via `vercel env pull`) was doomed regardless of
+Vercel-side correctness. Worth stating plainly rather than folding into
+the rest of this note: that was a real regression I introduced while
+trying to improve error messages, not an unrelated, pre-existing issue.
+
+**Verified**: full test suite (117), `tsc --noEmit`, and two from-scratch
+`pnpm build` runs — one reproducing the bug with fake values (proving
+the failure), one after the fix with the same fake values (proving the
+recovery), both confirmed by directly grepping compiled build output
+rather than just re-reading the source and assuming. The live Vercel
+deployment is still unverified from this sandbox (no egress) — next step
+is a real preview build with real credentials.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
