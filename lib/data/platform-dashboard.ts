@@ -36,6 +36,20 @@ function startOfMonth(now: Date): Date {
   return d;
 }
 
+// ISO week start (Monday) — deliberately NOT the same convention as
+// startOfWeek() above (which rolls back to Sunday, fine for a "this week"
+// label but wrong here): this has to match Postgres's date_trunc('week',
+// ...), which is always ISO/Monday-based, so the JS-generated bucket list
+// below lines up with the SQL grouping instead of silently mismatching it.
+function mondayOfWeek(d: Date): Date {
+  const date = new Date(d);
+  date.setUTCHours(0, 0, 0, 0);
+  const day = date.getUTCDay(); // 0 = Sunday .. 6 = Saturday
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setUTCDate(date.getUTCDate() + diff);
+  return date;
+}
+
 export async function getPlatformStats(currentAdminId: string): Promise<PlatformStats> {
   return withUserContext(currentAdminId, async (tx) => {
     const now = new Date();
@@ -70,6 +84,35 @@ export async function getPlatformStats(currentAdminId: string): Promise<Platform
       newFirmsThisMonth,
       signupMethodBreakdown: Array.from(breakdown, ([method, count]) => ({ method, count })),
     };
+  });
+}
+
+export type WeeklySignups = { weekStart: string; count: number };
+
+/** Weekly firm-signup counts for the last `weeks` ISO weeks (Monday-start), oldest first — zero-filled for weeks with no signups. */
+export async function getFirmSignupsByWeek(currentAdminId: string, weeks = 10): Promise<WeeklySignups[]> {
+  return withUserContext(currentAdminId, async (tx) => {
+    const now = new Date();
+    const earliestWeek = mondayOfWeek(now);
+    earliestWeek.setUTCDate(earliestWeek.getUTCDate() - (weeks - 1) * 7);
+
+    const rows = (await tx.execute(sql`
+      select date_trunc('week', created_at)::date as week_start, count(*)::int as count
+      from firms
+      where created_at >= ${earliestWeek.toISOString()}
+      group by week_start
+    `)) as unknown as { week_start: string; count: number }[];
+
+    const byWeek = new Map(rows.map((r) => [r.week_start, r.count]));
+
+    const buckets: WeeklySignups[] = [];
+    for (let i = weeks - 1; i >= 0; i--) {
+      const weekStart = mondayOfWeek(now);
+      weekStart.setUTCDate(weekStart.getUTCDate() - i * 7);
+      const key = weekStart.toISOString().slice(0, 10);
+      buckets.push({ weekStart: key, count: byWeek.get(key) ?? 0 });
+    }
+    return buckets;
   });
 }
 

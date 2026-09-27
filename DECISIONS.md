@@ -1537,6 +1537,72 @@ view beyond the current row-expansion (firm ID, owner email, full
 signup/last-active timestamps) — both flagged as follow-ups when this
 was scoped, not overlooked.
 
+## Dashboard health indicators + platform growth chart
+
+Two small phases, built together per an explicit go-ahead: activity-health
+badges + a growth chart on the platform admin dashboard, and a client
+activity badge + a needs-attention feed on the bookkeeper dashboard. A
+third piece (BIR deadlines widget) was scoped in the same conversation
+but deliberately held for its own pass — real due-date domain logic,
+wanted its own confirmation round before being built.
+
+**`lib/activity-health.ts`**: one pure function
+(`activityHealthFor(lastActiveAt, now)` → `active | quiet | dormant |
+never`, 7/14-day thresholds) shared by both dashboards — a platform
+admin's firms table feeds it each firm's last LOGIN; the bookkeeper
+dashboard feeds it each client's most recent journal entry. Same
+three-tier read on "how long since something happened here" in both
+places, just a different timestamp. `components/activity-badge.tsx`
+renders it as a small colored dot + label. Verified the day-boundary
+math directly (7.0 days = active, 7.01 = quiet, 14.0 = quiet, 14.01 =
+dormant, etc.) via a standalone script — boundary conditions are exactly
+where this kind of thing gets built wrong.
+
+**Growth chart — no new dependency.** Checked first: no charting library
+exists anywhere in this app. Built a plain inline SVG bar chart instead
+of introducing one for an 8-12-bar view — thin bars, rounded data-ends,
+per-bar hover/focus tooltip (mouse and keyboard), `aria-label` per bar
+standing in for a separate table view given how few data points there
+are. Loaded the dataviz skill before writing it (its own trigger: "any
+chart, in any output medium, including inline SVG") and used its
+validated sequential-blue default (`#2a78d6`) for the single series,
+re-validated with the palette script against this app's actual white
+surface rather than the skill's own default surface, per the skill's own
+instruction to do so. No dark mode: this app has none anywhere, so this
+chart doesn't invent one either.
+
+**Weekly bucketing had a real trap, caught before it shipped wrong**:
+Postgres's `date_trunc('week', ...)` is always ISO/Monday-based. This
+file already had a `startOfWeek()` helper for the "new firms this week"
+stat card that rolls back to *Sunday* — fine for that label, wrong for
+this chart if reused. Wrote a separate `mondayOfWeek()` specifically for
+the zero-filled week-bucket list this query generates, and verified live
+that it produces the identical date Postgres's own `date_trunc` does for
+a real seeded firm's `created_at`, not just that the two looked
+plausible in isolation.
+
+**Client status + needs-attention feed — no new grants, mostly reused
+code.** `getClientLastActivity()` (new, `lib/data/dashboard.ts`) is a
+plain `GROUP BY` over `journal_entries` through the existing RLS a
+bookkeeper/reviewer/firm_admin already has — no new policy needed, this
+was never gated the way the platform-admin side was. The needs-attention
+feed doesn't introduce a query at all: `listFirmDrafts()` already
+existed (built for the `/drafts` page and the "Unposted Drafts" stat
+card) and is exactly "drafts across every client, oldest first" — reused
+as-is, just capped to 6 rows for the dashboard widget. Added to the
+dashboard's right column for every staff role, not just `firm_admin`
+(who previously had the only thing there, "Recent Activity" from the
+audit log) — bookkeeper/reviewer had an empty gap in that column before
+this, now filled.
+
+**Verified**: activity-health boundaries and week-bucket alignment via
+standalone scripts (both above); `getClientLastActivity()`'s grouping
+verified live against real local seed data (3 clients, distinct
+`journal_entries` timestamps) as the actual firm_admin session, RLS
+correctly scoping to just that firm's clients. Full test suite (117,
+unchanged), `tsc --noEmit`, and `pnpm build` all pass — no new routes,
+everything lives inside the existing `/dashboard` page for both roles.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
