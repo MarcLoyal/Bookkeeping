@@ -1168,6 +1168,57 @@ the `pg_enum`/`pg_type` join correctly resolves `true`); the "not yet
 migrated" branch is straightforward catalog-lookup logic, not
 independently re-verified against an artificially un-migrated database.
 
+## Fix: "Continue with Google" hangs forever when a public env var is missing
+
+Reported live on the PR #22 preview: clicking the button got stuck on
+"Redirecting to Google..." permanently, with the only signal being a
+browser console error — `Uncaught (in promise) Error:
+NEXT_PUBLIC_SUPABASE_URL is not set.`
+
+**Two separate things, both real**:
+
+1. **The env var actually is missing from that deployment.**
+   `NEXT_PUBLIC_*` vars are inlined into the client bundle at *build*
+   time, not read at runtime — unlike server-side code (every other auth
+   flow this phase: login, signup, password reset), which reads
+   `process.env` live on each request and had been working fine on this
+   same preview. This is very likely a Vercel project setting: environment
+   variables can be scoped per Vercel environment (Production / Preview /
+   Development), and `NEXT_PUBLIC_SUPABASE_URL` /
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY` need the "Preview" scope checked, not
+   just "Production" — otherwise Preview builds simply don't have them,
+   silently, no build error either, since Next.js doesn't require
+   `NEXT_PUBLIC_*` vars to exist. This is a Vercel dashboard setting, not
+   something fixable from this codebase or this sandbox (no access to the
+   live Vercel project). Also worth remembering once the setting's fixed:
+   editing an env var afterward doesn't retroactively fix an
+   already-built deployment — it needs one more fresh build to pick it up.
+
+2. **`GoogleSignInButton`'s error handling had a real gap**, independent
+   of the above and worth fixing regardless of root cause:
+   `createSupabaseBrowserClient()` can throw synchronously (a missing
+   required env var is exactly one way), and that call wasn't wrapped in
+   try/catch. The throw became an unhandled promise rejection —
+   console-only, invisible to an actual user — and `setPending(false)`
+   never ran, so the button stayed stuck on "Redirecting to Google..."
+   with no visible error, forever. Now wrapped: any failure from either
+   `createSupabaseBrowserClient()` or `signInWithOAuth()` itself surfaces
+   as a normal on-page error message and un-sticks the button. This means
+   *any* future misconfiguration of this kind fails visibly on the page
+   instead of silently in the console — not just this specific one.
+
+**Deliberately not added**: a build-time hard-fail in `next.config.ts` if
+these vars are missing. Considered it, since it would catch a Vercel
+scope misconfiguration like this one directly in the build log — but this
+sandbox's own `NEXT_PUBLIC_SUPABASE_URL` is (and always has been, all
+phases) intentionally blank locally, since there's no real Supabase
+project reachable here; a hard build-time throw would break this
+project's own `pnpm build` verification step, which every phase in this
+project has relied on. A soft `console.warn` was considered too, but
+given the actual fix here is a one-line Vercel dashboard setting rather
+than a code change, it didn't seem worth the added config-file surface
+for a warning easy to keep scrolling past anyway.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
