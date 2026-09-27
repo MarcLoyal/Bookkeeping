@@ -1095,6 +1095,46 @@ something already unambiguous from source. The Supabase Admin API calls
 (listing/deleting the real auth user) are unverified from this sandbox,
 same limitation as every other live-auth script this phase.
 
+## Fix: `delete-test-signup.ts` hanging silently after confirmation
+
+Reported live: typed "y" at the confirmation prompt, pressed Enter, then
+2+ minutes of total silence — no error, no further output, nothing
+deleted. Two candidate causes, genuinely indistinguishable from the
+outside with the script as it stood, since neither produced any output:
+
+1. The `readline`-based `confirm()` never actually saw the keypress.
+   `process.stdin` sitting paused when the script starts has been an
+   observed gap in some `tsx`/`pnpm` invocation paths, and readline's own
+   auto-resume-on-TTY-detection hasn't reliably covered every such case
+   across Node versions.
+2. The `DELETE FROM firms` itself hung — e.g. blocked on a lock held by
+   some other session — and `postgres.js` had no statement timeout, so a
+   genuinely stuck query would wait forever with no error.
+
+Both fixed, since the report couldn't distinguish which one actually
+happened:
+
+- `confirm()` no longer uses `readline`. It listens on `process.stdin`
+  directly and calls `.resume()` explicitly before attaching the
+  listener, sidestepping readline's TTY auto-detection entirely rather
+  than trying to out-guess which Node/tsx/pnpm combination triggers the
+  gap.
+- The `postgres.js` client now sets `connection: { statement_timeout:
+  15000 }` — a stuck `DELETE` now fails loudly within 15 seconds instead
+  of hanging indefinitely.
+- Added `console.log("Deleting...")` / `"Checking Supabase Auth..."`
+  immediately before each network/DB call that follows confirmation, so
+  a future hang (if one still happens) is immediately locatable — "never
+  printed 'Deleting...'" now unambiguously means the confirmation step,
+  not the delete.
+
+Unverified against the user's actual environment (this sandbox can't
+reproduce their exact tsx/pnpm/terminal combination or reach their real
+Supabase project) — the `statement_timeout` addition is verifiable
+reasoning about `postgres.js`'s documented behavior, not a live
+reproduction of the hang. If it recurs, the new log lines should make
+clear which half of the fix (if either) actually addressed it.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

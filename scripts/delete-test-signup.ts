@@ -1,7 +1,6 @@
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local" });
 
-import { createInterface } from "node:readline/promises";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 
@@ -51,7 +50,12 @@ async function main() {
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  const sql = postgres(migrationDatabaseUrl, { max: 1, prepare: false });
+  // statement_timeout: a stuck DELETE (e.g. blocked on a lock held by some
+  // other session) fails loudly within 15s instead of hanging silently
+  // forever with no error — reported live as an indistinguishable-looking
+  // hang after confirming, and this is the fix for the "no error, ever"
+  // half of that; see the confirm() rewrite below for the other half.
+  const sql = postgres(migrationDatabaseUrl, { max: 1, prepare: false, connection: { statement_timeout: 15000 } });
 
   const [profileRow] = await sql<{ id: string; firm_id: string | null; role: string }[]>`
     select id, firm_id, role from users where email = ${email}
@@ -96,6 +100,7 @@ async function main() {
       return;
     }
 
+    console.log("Deleting...");
     try {
       await sql`delete from firms where id = ${profileRow.firm_id}`;
     } catch (err) {
@@ -111,6 +116,7 @@ async function main() {
   }
 
   // Independent of the public.users lookup above — see doc comment.
+  console.log("Checking Supabase Auth...");
   const perPage = 200;
   let authUser: { id: string } | null = null;
   for (let page = 1; ; page++) {
@@ -136,11 +142,28 @@ async function main() {
   console.log(`\n${email} is now completely free to reuse.`);
 }
 
+/**
+ * Deliberately not readline: reported live as hanging silently (no error,
+ * no output at all) after typing "y" and pressing Enter — indistinguishable,
+ * from the outside, between readline never seeing the keypress and the
+ * DELETE below hanging on a lock (see the statement_timeout fix for the
+ * latter). The most likely cause for the former is process.stdin sitting
+ * paused when this script starts (observed with some tsx/pnpm invocation
+ * paths) — readline's own auto-resume has had version-dependent gaps for
+ * exactly this. Listening on stdin directly and calling resume() explicitly
+ * sidesteps that entirely rather than trying to out-guess readline's
+ * TTY detection.
+ */
 async function confirm(question: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`${question} [y/N] `);
-  rl.close();
-  return answer.trim().toLowerCase() === "y";
+  process.stdout.write(`${question} [y/N] `);
+  return new Promise((resolve) => {
+    process.stdin.setEncoding("utf8");
+    process.stdin.once("data", (chunk) => {
+      process.stdin.pause();
+      resolve(chunk.toString().trim().toLowerCase() === "y");
+    });
+    process.stdin.resume();
+  });
 }
 
 main().catch((err) => {
