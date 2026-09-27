@@ -50,7 +50,28 @@ async function main() {
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  const sql = postgres(migrationDatabaseUrl, { max: 1, prepare: false });
+  const sql = postgres(migrationDatabaseUrl, { max: 1, prepare: false, connection: { statement_timeout: 15000 } });
+
+  // Fails fast, before ever touching Supabase Auth, if this database hasn't
+  // had db/migrations/0005_curved_stark_industries.sql applied yet (adds
+  // 'platform_admin' to the user_role enum) — reported live: without this
+  // check, the script created the Supabase Auth user successfully and only
+  // then failed inserting into public.users, leaving an orphaned auth user
+  // with no profile row (see scripts/delete-test-signup.ts to clean one up).
+  const [{ exists: enumValueExists }] = await sql<{ exists: boolean }[]>`
+    select exists (
+      select 1 from pg_enum e join pg_type t on e.enumtypid = t.oid
+      where t.typname = 'user_role' and e.enumlabel = 'platform_admin'
+    ) as exists
+  `;
+  if (!enumValueExists) {
+    console.error(
+      "This database doesn't have 'platform_admin' in the user_role enum yet.\n" +
+        "Run `pnpm db:migrate` against it first (applies 0005_curved_stark_industries.sql), then retry this script."
+    );
+    await sql.end();
+    process.exit(1);
+  }
 
   // The admin API has no direct getUserByEmail — page through listUsers().
   async function findAuthUserByEmail(targetEmail: string) {

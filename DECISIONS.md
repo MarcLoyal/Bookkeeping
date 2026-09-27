@@ -1135,6 +1135,39 @@ reasoning about `postgres.js`'s documented behavior, not a live
 reproduction of the hang. If it recurs, the new log lines should make
 clear which half of the fix (if either) actually addressed it.
 
+## Fix: `create-platform-admin.ts` failing after `db:migrate` was never run
+
+Reported live: the script created the Supabase Auth user successfully,
+then failed inserting into `public.users` with `PostgresError: invalid
+input value for enum user_role: "platform_admin"` — the target database
+had never had `db/migrations/0005_curved_stark_industries.sql` (adds
+`platform_admin` to the enum) applied. Running `pnpm create-platform-admin`
+never runs migrations itself — `pnpm db:migrate` is a separate, explicit
+step — and nothing in the script or the earlier usage instructions said
+so, so the ordering wasn't obvious.
+
+Two things, not one: getting this specific run unstuck, and stopping the
+same failure mode from creating another orphaned auth user next time.
+
+**This run**: the Supabase Auth user it created
+(`c9b56cc6-fa90-4efd-9ec7-b7d243402f92`) has no matching `public.users`
+row — the exact "orphaned auth user" case `delete-test-signup.ts` was
+already built to handle (it checks for a Supabase Auth user by email
+independently of whether a profile row exists). No new cleanup code
+needed; re-running that script for the same email finds and removes it.
+
+**Going forward**: `create-platform-admin.ts` now checks
+`pg_enum`/`pg_type` for `platform_admin` on `user_role` *before* ever
+calling `supabase.auth.admin.createUser()`, and fails fast with an
+actionable message ("Run `pnpm db:migrate` against it first...") instead
+of creating an auth user it can't yet finish provisioning. Turns this
+specific failure mode into "nothing happened, here's why" instead of
+"partially happened, here's a mess to clean up." Verified the query
+itself against the local sandbox database (already migrated — confirms
+the `pg_enum`/`pg_type` join correctly resolves `true`); the "not yet
+migrated" branch is straightforward catalog-lookup logic, not
+independently re-verified against an artificially un-migrated database.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
