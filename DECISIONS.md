@@ -1039,6 +1039,62 @@ admin — is unverified from this sandbox (no egress to a real Supabase
 project); opened as a draft PR pending you running it against your own
 project.
 
+## Fix: `create-platform-admin.ts` arg parsing, plus a cleanup script
+
+Two small additions on top of the `platform_admin` PR, both found via live
+use rather than anticipated in advance.
+
+**`pnpm <script> -- <args>` (the bare form, without `run`) forwarded the
+`--` separator itself as an argument**, reported live: `pnpm
+create-platform-admin -- mrcabanador@gmail.com "Marc Abanador"` sent `"--"`
+to Supabase's admin API as the email, which understandably rejected it as
+an invalid address. `pnpm run <script> -- <args>` and plain `npm` both
+strip the separator; this pnpm form apparently doesn't. Fixed by filtering
+a literal `"--"` out of `process.argv` before parsing in
+`create-platform-admin.ts` — correct either way, regardless of which
+convention the caller's pnpm version follows. Verified in isolation
+(`process.argv` set to both the with-`--`and without-`--`shapes, same
+parse result both times) rather than just reasoning about it, since this
+is exactly the kind of off-by-one argv bug that's easy to "fix" wrong.
+
+**`scripts/delete-test-signup.ts`** (new): a real leftover from Phase 2
+testing — a plain email/password signup under the same email wanted for
+the first platform admin — needed cleaning up first, properly, not just
+by deleting a `users` row and leaving the firm/clients/journal entries
+behind. Deletes the whole firm (`DELETE FROM firms WHERE id = ...`
+cascades to `clients` and everything under them per the existing ON
+DELETE CASCADE chain — see `db/schema`) plus the matching Supabase Auth
+user, so the email is completely free to reuse. Two safety properties,
+not afterthoughts:
+
+- **Refuses to touch a firm with any posted/reversed journal entries** —
+  the DB's own `enforce_journal_entry_immutability` trigger rejects
+  deleting those outright ("Use a reversing entry instead"), and this
+  script does not attempt to work around that. A failure here means real
+  financial history exists under this email and needs a human decision,
+  not automated cleanup.
+- **Interactive confirmation by default**: prints the firm name, client
+  and journal-entry counts, and — importantly — any *other* users
+  belonging to the same firm (who'd be deleted too) before asking to
+  proceed. `--yes` skips the prompt for non-interactive use.
+
+Also independently checks for a Supabase Auth user with the target email
+even when no `public.users` row exists, covering the documented gap in
+`lib/auth/signup.ts` (a DB failure right after a successful Supabase Auth
+signup leaves an orphaned auth user with no profile row).
+
+**Verified against the local sandbox database** (wrapped in `BEGIN` /
+`ROLLBACK`, nothing persisted): inserted a throwaway firm + user + client
+and confirmed `DELETE FROM firms` cascades cleanly to all three. The
+delete-blocking behavior for posted/reversed entries was confirmed by
+reading `enforce_journal_entry_immutability` directly (a plain
+`IF OLD.status IN ('posted','reversed') THEN RAISE EXCEPTION` on
+`TG_OP = 'DELETE'`) rather than constructing a fully-balanced posted
+entry through the separate balance-check trigger just to re-derive
+something already unambiguous from source. The Supabase Admin API calls
+(listing/deleting the real auth user) are unverified from this sandbox,
+same limitation as every other live-auth script this phase.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

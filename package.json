@@ -12,6 +12,7 @@
     "seed": "tsx db/seed.ts",
     "migrate-demo-users": "tsx scripts/migrate-demo-users-to-supabase-auth.ts",
     "create-platform-admin": "tsx scripts/create-platform-admin.ts",
+    "delete-test-signup": "tsx scripts/delete-test-signup.ts",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
