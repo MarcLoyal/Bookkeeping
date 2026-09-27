@@ -741,6 +741,31 @@ the `NOT VALID` version succeeds immediately and `VALIDATE CONSTRAINT`
 correctly fails before re-keying and succeeds after, before shipping the
 fix — not just reasoned about abstractly.
 
+**Second bug this caught, live**: with the FK fixed, `pnpm migrate-demo-users`
+got further but then failed on `admin@keepbooks.demo`'s re-key with
+"Posted journal entry ... is immutable. Use a reversing entry instead."
+The `ON UPDATE CASCADE` on `journal_entries.posted_by`/`created_by`
+(added in `db/sql/004_supabase_auth.sql`) touches those columns even on
+already-posted entries — but `enforce_journal_entry_immutability()`'s
+only allowed exception was the reversal status-flip, and even that
+required `posted_by` to stay byte-for-byte unchanged. Checked every
+other `ON UPDATE CASCADE`d column first (`period_locks`, `audit_log`,
+`user_client_assignments`) — none of the rest have an immutability
+trigger, only `journal_entries` does. Fixed in
+`db/sql/005_immutability_allow_user_rekey.sql`: the trigger now allows
+an update where the *only* things that change are `posted_by`/
+`created_by` — status and every financial field (amounts, dates, lines,
+book, reference) must stay exactly as-is, or it's still rejected exactly
+as before. Not a weakening of rule #3: the app itself never runs
+`UPDATE journal_entries SET posted_by = ...` anywhere — only this
+privileged, one-time re-keying script does — so the narrower exception
+doesn't open up anything the running app could exploit. Verified against
+real posted *and* reversed entries in the seeded demo data: reproduced
+the exact reported error first, confirmed the fix lets the re-key cascade
+through on both statuses, then confirmed genuine tampering (changing an
+`entry_date`, editing a `description`) is still rejected on both —
+before reverting the test re-key and shipping.
+
 **Demo accounts**: `scripts/migrate-demo-users-to-supabase-auth.ts`
 (`pnpm migrate-demo-users`) creates the 3 seeded demo accounts as real
 Supabase Auth users and re-keys their `public.users.id` to match —

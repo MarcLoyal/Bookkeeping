@@ -14,6 +14,11 @@ import postgres from "postgres";
  * this is what actually makes "admin@keepbooks.demo" / "password123"
  * loggable-into again after the migration.
  *
+ * Needs db/sql/005_immutability_allow_user_rekey.sql applied first — the
+ * cascade above touches journal_entries.posted_by/created_by even on
+ * already-posted entries, which the original immutability trigger
+ * rejected outright (found live, running this script the first time).
+ *
  * Idempotent: safe to re-run. Skips a demo user entirely if db/seed.ts
  * hasn't been run against this database yet (no matching row to update).
  */
