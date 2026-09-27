@@ -7,6 +7,7 @@ const ROLE_LABELS: Record<string, string> = {
   bookkeeper: "Bookkeeper",
   reviewer: "Reviewer",
   client_user: "Client",
+  platform_admin: "Platform Admin",
 };
 
 /**
@@ -34,7 +35,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <Link href="/dashboard" prefetch={false} className="hover:text-slate-900">
                 Dashboard
               </Link>
-              {user && user.role !== "client_user" && (
+              {user && user.role !== "client_user" && user.role !== "platform_admin" && (
                 <Link href="/clients" prefetch={false} className="hover:text-slate-900">
                   Clients
                 </Link>

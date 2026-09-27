@@ -17,16 +17,27 @@ export function GoogleSignInButton() {
   async function handleClick() {
     setPending(true);
     setError(null);
-    const supabase = createSupabaseBrowserClient();
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    });
-    if (error) {
-      setError(error.message);
+    // Wrapped in try/catch: createSupabaseBrowserClient() can throw
+    // synchronously (e.g. a missing NEXT_PUBLIC_SUPABASE_URL — reported
+    // live as the button hanging on "Redirecting to Google..." forever,
+    // with only a console-only unhandled promise rejection and no visible
+    // error, since nothing here caught it to reset `pending`). Any failure
+    // now surfaces on the page and un-sticks the button.
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      });
+      if (error) {
+        setError(error.message);
+        setPending(false);
+      }
+      // On success the browser is redirected to Google — nothing more to do here.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
       setPending(false);
     }
-    // On success the browser is redirected to Google — nothing more to do here.
   }
 
   return (

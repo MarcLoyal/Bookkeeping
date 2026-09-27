@@ -10,7 +10,23 @@ export async function middleware(request: NextRequest) {
   // stay in sync — see https://supabase.com/docs/guides/auth/server-side/nextjs.
   let supabaseResponse = NextResponse.next({ request });
 
-  const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+  // Read as static literal expressions, not through a requireEnv(name)
+  // helper: middleware runs in the Edge runtime, where — like the browser
+  // (see lib/auth/supabase-browser.ts) — NEXT_PUBLIC_* values are injected
+  // at build time via static text substitution keyed on the exact
+  // `process.env.NEXT_PUBLIC_X` expression appearing directly in source.
+  // An earlier version of this file used requireEnv("NEXT_PUBLIC_...")
+  // (process.env[name] with a variable key) specifically to make a missing
+  // var's error message clearer — that inadvertently broke the static
+  // analysis Next.js needs to inline the value here at all, turning a
+  // clear error into every request 500ing even with the var correctly set
+  // in Vercel. Confirmed live by inspecting a real build's compiled output.
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl) throw new Error("NEXT_PUBLIC_SUPABASE_URL is not set.");
+  if (!supabaseAnonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not set.");
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll();

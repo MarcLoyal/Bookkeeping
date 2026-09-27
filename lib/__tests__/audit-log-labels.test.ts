@@ -38,6 +38,12 @@ describe("describeAuditEntry", () => {
     );
   });
 
+  it("describes a platform admin account creation", () => {
+    expect(describeAuditEntry({ action: "ADMIN_CREATED", tableName: "users", before: null, after: null, reason: null })).toBe(
+      "Platform admin created"
+    );
+  });
+
   it("describes a role change on a users row", () => {
     expect(
       describeAuditEntry({

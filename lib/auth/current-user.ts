@@ -5,7 +5,7 @@ import { withUserContext } from "@/db/client";
 import { users } from "@/db/schema";
 import { createSupabaseServerClient } from "./supabase-server";
 
-export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user";
+export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user" | "platform_admin";
 
 export type CurrentUser = {
   id: string;

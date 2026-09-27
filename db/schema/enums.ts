@@ -5,6 +5,10 @@ export const userRoleEnum = pgEnum("user_role", [
   "bookkeeper",
   "reviewer",
   "client_user",
+  // Sits above every firm — not scoped to one. users.firm_id is NULL for
+  // this role (see db/schema/firms.ts). Created only via
+  // scripts/create-platform-admin.ts, never through self-serve signup.
+  "platform_admin",
 ]);
 
 export const taxpayerTypeEnum = pgEnum("taxpayer_type", [
