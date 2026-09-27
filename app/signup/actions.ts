@@ -11,6 +11,7 @@ export async function signupAction(_prevState: SignupActionState, formData: Form
     name: formData.get("name"),
     email: formData.get("email"),
     password: formData.get("password"),
+    confirmPassword: formData.get("confirmPassword"),
   });
 
   if (!result.ok) {

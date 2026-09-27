@@ -67,10 +67,29 @@ export function SignupForm() {
           type="password"
           required
           minLength={8}
+          pattern="(?=.*[A-Z])(?=.*[^A-Za-z0-9]).{8,}"
+          title="At least 8 characters, including one uppercase letter and one special character."
           autoComplete="new-password"
           className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
         />
-        <p className="mt-1 text-xs text-slate-500">At least 8 characters.</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-500">
+          <li>At least 8 characters</li>
+          <li>At least one uppercase letter</li>
+          <li>At least one special character</li>
+        </ul>
+      </div>
+      <div>
+        <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700">
+          Confirm password
+        </label>
+        <input
+          id="confirmPassword"
+          name="confirmPassword"
+          type="password"
+          required
+          autoComplete="new-password"
+          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+        />
       </div>
       {state.error && <p className="text-sm text-red-600">{state.error}</p>}
       <button

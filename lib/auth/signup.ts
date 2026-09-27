@@ -4,12 +4,29 @@ import { authDb } from "@/db/authClient";
 import { auditLog, firms, users } from "@/db/schema";
 import { createSupabaseServerClient } from "./supabase-server";
 
-export const signupSchema = z.object({
-  firmName: z.string().min(1, "Firm name is required.").max(200),
-  name: z.string().min(1, "Your name is required.").max(200),
-  email: z.string().email(),
-  password: z.string().min(8, "Password must be at least 8 characters."),
-});
+// Kept in sync with the pattern= hints on app/signup/signup-form.tsx's
+// password field — the form gives immediate browser-level feedback, this
+// is the authoritative check.
+export const PASSWORD_MIN_LENGTH = 8;
+const UPPERCASE_RE = /[A-Z]/;
+const SPECIAL_CHAR_RE = /[^A-Za-z0-9]/;
+
+export const signupSchema = z
+  .object({
+    firmName: z.string().min(1, "Firm name is required.").max(200),
+    name: z.string().min(1, "Your name is required.").max(200),
+    email: z.string().email(),
+    password: z
+      .string()
+      .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`)
+      .regex(UPPERCASE_RE, "Password must include at least one uppercase letter.")
+      .regex(SPECIAL_CHAR_RE, "Password must include at least one special character."),
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
 
 export type SignupResult =
   | { ok: true; needsEmailConfirmation: boolean }

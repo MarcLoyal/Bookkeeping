@@ -834,6 +834,25 @@ a real `supabase.auth.signUp()` call is what still needs a live
 walkthrough. Full test suite (116, two new for the added labels),
 `tsc --noEmit`, and `pnpm build` all pass.
 
+**Password confirmation + complexity** (added after initial review):
+a "Confirm password" field, checked server-side via zod's `.refine()`
+against `password` (the same generic error-banner pattern every other
+form validation error in this app already uses — no new per-field error
+UI introduced). Complexity requirements (min 8 chars, one uppercase, one
+special character) are enforced by the schema and, redundantly, by the
+password `<input>`'s `pattern`/`minLength` attributes for immediate
+browser feedback before the form even submits — the zod schema is what's
+authoritative, the `pattern` is a convenience layer matching the existing
+project convention (e.g. the employee TIN field). The three requirements
+are listed as a plain bullet list directly under the field, not left for
+the user to discover only after a failed submit. Verified by running the
+exact zod schema standalone (too-short / no-uppercase / no-special-char /
+mismatched / valid cases) rather than just reading it — `lib/auth/signup.ts`
+imports `"server-only"`, so this had to be a schema-only script outside
+the module, not a `pnpm test` unit test (matches this codebase's existing
+precedent of not unit-testing the other auth schemas directly, e.g.
+`resetPasswordSchema`).
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
