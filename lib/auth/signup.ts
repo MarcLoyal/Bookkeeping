@@ -63,7 +63,7 @@ export async function signUp(input: unknown): Promise<SignupResult> {
   }
 
   try {
-    await createFirmForUser({ userId: data.user.id, email, name, firmName });
+    await createFirmForUser({ userId: data.user.id, email, name, firmName, signupMethod: "email" });
   } catch (err) {
     // The Supabase Auth user now exists but has no firm/profile row — a
     // genuine gap, not handled here: retrying signup with the same email

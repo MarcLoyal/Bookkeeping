@@ -1442,6 +1442,101 @@ unverified from this sandbox (no egress to a real Supabase project);
 opened as a draft PR pending a live walkthrough with a second real
 email address.
 
+## Platform admin dashboard, part 1: stats + firms/bookkeepers table
+
+Replaces `/dashboard`'s platform-admin placeholder with the real thing:
+an overview stats row and a searchable firms/bookkeepers table. Split
+from the rest of the originally-requested dashboard (a "recent platform
+activity" feed of firm signups and admin actions) per an explicit
+phasing discussion — that piece needs its own, separately-scoped RLS
+decision and is deliberately not in this PR.
+
+**One schema change**: `signup_method` (new enum, `'email' | 'google'`)
+on `users`, set once at account creation by the two places that already
+know which path they're on — `lib/auth/signup.ts` (`'email'`) and
+`app/onboarding/firm/actions.ts` (`'google'`) — both via
+`createFirmForUser()`'s now-required `signupMethod` param. Worth noting
+what this closes: even the audit log didn't distinguish these before —
+both paths wrote an identical `SIGNUP` action with nothing to tell them
+apart, since they share the same bootstrap helper. NULL for rows that
+predate this column and for anything that isn't a firm's owner (demo
+seed data, platform admins, staff invited later).
+
+**RLS: two real per-row grants, three SECURITY DEFINER aggregates —
+deliberately not one broad grant.** Confirmed with the product owner
+beforehand: platform admins should see firm names/owners/client counts
+and audit summaries, explicitly *not* full client data or raw
+before/after diffs. Two shapes came out of that:
+
+- `firms_select_platform_admin` (broad — `app_current_role() =
+  'platform_admin'`) and `users_select_platform_admin_owners` (narrow —
+  same, plus `role = 'firm_admin'`): real row-level policies, because the
+  dashboard genuinely needs per-row firm names and owner name/email, and
+  neither is sensitive the way a client record is.
+- `platform_total_active_users()`, `platform_client_counts()`, and
+  `platform_firms_last_active()`: SECURITY DEFINER functions (same
+  pattern this file already uses for `app_accessible_client_ids()`)
+  instead of widening `clients_select` or `audit_log_select` at all.
+  Considered the alternative — grant broad SELECT and trust the app's
+  queries to only ask for safe columns — and rejected it: RLS filters
+  rows, not columns, so a broad grant is one differently-written query
+  away from exposing full client rows or raw audit diffs later. These
+  functions return only the specific aggregate needed (a count, a
+  timestamp) and nothing else; **no RLS policy granting platform_admin
+  access to `clients` or `audit_log` exists anywhere in this schema.**
+  `platform_firms_last_active()` only ever reads `action = 'LOGIN'` rows,
+  which structurally never carry a before/after payload (neither
+  `lib/auth/login.ts` nor `lib/auth/oauth-callback.ts` ever sets one when
+  logging a LOGIN) — safe by construction, not just by convention.
+
+**Verified live**, not just written and trusted: seeded a test platform
+admin, then — as the real RLS-enforcing `keepbooks_app` role with a
+session context set, against the actual local seed data (1 firm, 3
+clients, 3 users) — confirmed every one of: firm visible, the one
+firm_admin/owner row visible, zero bookkeeper/reviewer rows visible, a
+plain `SELECT * FROM clients` returns **zero rows** even though the
+functions can still compute the right count from the same table, same
+for a plain `SELECT * FROM audit_log`, and all three functions return
+the numerically correct values against the real seeded data.
+
+**"Owner" for a firm with more than one `firm_admin`** (co-admins are
+possible via existing in-app staff invites): defined as the
+earliest-created `firm_admin` row for that firm — computed in
+application code (`lib/data/platform-dashboard.ts`) after an RLS-scoped
+fetch, not a SQL `DISTINCT ON`, since the current scale doesn't need it
+and this keeps the query portable rather than depending on a specific
+Drizzle version's support for that clause. Confirmed this definition
+with the product owner before building.
+
+**"Last active" and the aggregate functions' own reach**: like every
+other `SECURITY DEFINER` function in this file
+(`app_accessible_client_ids()` included), these three don't themselves
+check "is the caller a platform admin" — a function's `EXECUTE`
+privilege isn't restricted by role. The boundary is where it's always
+been in this app: `requirePlatformAdmin()` gates the only route that
+calls them. Not a new gap, the same shape as everything else here.
+
+**Verification limits from this sandbox**: no real Supabase project
+reachable here, so nothing in this PR could be exercised through an
+actual authenticated browser session — the same constraint every other
+auth-gated feature this phase has had. Went further than usual anyway:
+stood up a temporary, unauthenticated test route calling
+`getPlatformStats()`/`listFirmsForDashboard()` directly against real
+local seed data, confirmed it's blocked by middleware exactly as
+expected (no real `NEXT_PUBLIC_SUPABASE_URL` locally), then removed it
+before committing — nothing resembling a debug/test route ships. The SQL
+verification above and a standalone script checking the date-boundary
+math (`startOfWeek`/`startOfMonth`) and the earliest-owner-per-firm
+reduction logic are what stand in for it. `pnpm test` (117, unchanged),
+`tsc --noEmit`, and `pnpm build` (picked up no new routes — this
+replaces a branch inside the existing `/dashboard` page) all pass.
+
+**Deliberately out of this PR**: the "recent platform activity" feed
+(firm signups, admin actions) and any deeper per-firm activity/detail
+view beyond the current row-expansion (firm ID, owner email, full
+signup/last-active timestamps) — both flagged as follow-ups when this
+was scoped, not overlooked.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
