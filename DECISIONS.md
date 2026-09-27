@@ -777,6 +777,82 @@ idempotent, safe to re-run. Their old bcrypt hashes never carried over
 `lib/auth/session.ts`/`password.ts` are gone), `AUTH_SECRET` (nothing
 reads it anymore).
 
+## Phase 2 of real multi-tenancy: self-serve firm signup
+
+Builds on Phase 1's Supabase Auth foundation — a new `/signup` page where
+a bookkeeper creates their own firm and becomes its first `firm_admin`,
+no manual provisioning needed. Google sign-in on this page is Phase 3,
+not added here (the form is email/password only for now).
+
+**`lib/auth/signup.ts`**: `supabase.auth.signUp()` first, then — on
+success — one transaction on `authDb` (the RLS-bypassing schema-owning
+connection, same one `login.ts`/`password-reset.ts` already use) creates
+the `firms` row and its first `users` row, `role: 'firm_admin'`,
+`id` set to the Supabase Auth user's own id. Bypassing RLS here isn't a
+shortcut: `users_insert`'s policy requires an *existing* `firm_admin` to
+already be acting, which is circular for a firm that by definition has
+no users yet — this is the one place in the app a brand-new identity has
+to be bootstrapped outside RLS. `db/authClient.ts`'s doc comment was
+updated to name all three legitimate callers now that there's a third.
+
+**Email confirmation is handled either way, not assumed**: whether
+Supabase requires confirming your email before a session exists is a
+Supabase dashboard setting this app doesn't control or know in advance.
+`signUp()` returns `needsEmailConfirmation: !data.session` — the caller
+shows "check your email" when true, redirects straight to `/dashboard`
+when Supabase already established a session. Untested against a live
+project (same limitation as Phase 1 — this sandbox can't reach one), so
+this is the first thing to verify live before merging.
+
+**A real, disclosed gap, not a simplification**: if the Supabase Auth
+call succeeds but the DB transaction fails right after (rare — a DB
+failure immediately following a successful upstream call, not a normal
+validation failure), the result is an orphaned Supabase Auth user with no
+firm/profile row. Retrying signup with the same email then hits
+Supabase's "already registered" error with no way to resume rather than
+start over. Not handled in this phase — flagged here rather than silently
+assumed away. Resuming an interrupted signup (detecting "this email has
+an auth identity but no profile" and completing just the DB step) would
+close this gap if it turns out to matter in practice.
+
+**Audit trail**: `signUp()` writes its own `SIGNUP` audit_log row,
+correctly attributed to the new user (their `id` already exists in this
+same transaction by the time it's written) — labeled "Firm created" in
+`lib/audit-log-labels.ts`. The generic `audit_users` trigger also fires
+on the `users` insert with a `NULL` actor (this transaction never sets
+`app.current_user_id`, so `app_current_user_id()` has nothing to read) —
+same as every demo user's own creation via `db/seed.ts`, already-accepted
+behavior, not new here. Added a `PASSWORD_RESET` label too while touching
+this file — it existed as an audit action since Phase 0/1 but had no
+human-readable description yet, falling back to "PASSWORD_RESET users".
+
+**Verified**: the DB transaction shape (insert firm, insert its first
+firm_admin, insert the SIGNUP audit row) run directly against the local
+sandbox schema and rolled back cleanly — proves the SQL-level operations
+this transaction performs are sound, though the full flow starting from
+a real `supabase.auth.signUp()` call is what still needs a live
+walkthrough. Full test suite (116, two new for the added labels),
+`tsc --noEmit`, and `pnpm build` all pass.
+
+**Password confirmation + complexity** (added after initial review):
+a "Confirm password" field, checked server-side via zod's `.refine()`
+against `password` (the same generic error-banner pattern every other
+form validation error in this app already uses — no new per-field error
+UI introduced). Complexity requirements (min 8 chars, one uppercase, one
+special character) are enforced by the schema and, redundantly, by the
+password `<input>`'s `pattern`/`minLength` attributes for immediate
+browser feedback before the form even submits — the zod schema is what's
+authoritative, the `pattern` is a convenience layer matching the existing
+project convention (e.g. the employee TIN field). The three requirements
+are listed as a plain bullet list directly under the field, not left for
+the user to discover only after a failed submit. Verified by running the
+exact zod schema standalone (too-short / no-uppercase / no-special-char /
+mismatched / valid cases) rather than just reading it — `lib/auth/signup.ts`
+imports `"server-only"`, so this had to be a schema-only script outside
+the module, not a `pnpm test` unit test (matches this codebase's existing
+precedent of not unit-testing the other auth schemas directly, e.g.
+`resetPasswordSchema`).
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

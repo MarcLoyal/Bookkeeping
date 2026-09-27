@@ -6,14 +6,16 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 /**
- * A privileged, RLS-bypassing connection reserved EXCLUSIVELY for the login
- * credential lookup (see lib/auth/login.ts). Real Supabase Auth lives in a
- * separate `auth` schema outside application RLS for the same reason: you
- * cannot look up a user by email to check their password under a policy
- * that requires you to already be that user. This sandbox dev auth shim
- * reuses the schema-owning connection to play that role.
+ * A privileged, RLS-bypassing connection reserved for auth flows that must
+ * act before any session/tenant RLS context exists — currently:
+ * lib/auth/login.ts (looking a user up by email to attribute a failed
+ * attempt), lib/auth/password-reset.ts (the PASSWORD_RESET audit row),
+ * and lib/auth/signup.ts (creating a brand-new firm + its first
+ * firm_admin — circular to gate behind RLS's `users_insert` policy, which
+ * requires an *existing* firm_admin to already be acting, for a firm that
+ * by definition has no users yet).
  *
- * Do NOT import this anywhere else. Every other query must go through
+ * Do NOT import this for anything else. Every other query must go through
  * db/client.ts's withUserContext() so RLS is enforced.
  */
 const connectionString = process.env.MIGRATION_DATABASE_URL;

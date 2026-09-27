@@ -1,17 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/current-user";
-import { LoginForm } from "./login-form";
+import { SignupForm } from "./signup-form";
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ reset?: string }>;
-}) {
+export default async function SignupPage() {
   const user = await getCurrentUser();
   if (user) redirect("/dashboard");
-
-  const { reset } = await searchParams;
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-50 px-4">
@@ -28,19 +22,14 @@ export default async function LoginPage({
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white">
             K
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">Keep.Books</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in to your firm workspace</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">Create your firm</h1>
+          <p className="mt-1 text-sm text-slate-500">Set up a new Keep.Books workspace</p>
         </div>
-        {reset && (
-          <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            Your password has been reset. Sign in with your new password.
-          </p>
-        )}
-        <LoginForm />
+        <SignupForm />
         <p className="mt-6 text-center text-sm text-slate-500">
-          Don&apos;t have an account?{" "}
-          <Link href="/signup" className="font-medium text-slate-900 hover:underline">
-            Create your firm
+          Already have an account?{" "}
+          <Link href="/login" className="font-medium text-slate-900 hover:underline">
+            Sign in
           </Link>
         </p>
       </div>

@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password", "/auth/confirm"];
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password", "/auth/confirm"];
 
 export async function middleware(request: NextRequest) {
   // Supabase's documented Next.js middleware pattern: the response object
