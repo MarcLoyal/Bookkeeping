@@ -721,6 +721,26 @@ which depends on Supabase's own email template configuration — has not
 been exercised end-to-end and is the main thing to verify together before
 merging.
 
+**Real bug this caught, live**: running `pnpm db:migrate` against a real
+Supabase project failed — `db/sql/004_supabase_auth.sql`'s
+`ADD CONSTRAINT ... FOREIGN KEY (id) REFERENCES auth.users(id)` validates
+every existing row immediately, and the demo firm's 3 pre-existing
+`public.users` rows (created before this migration, under the old auth
+system) have no matching `auth.users` row yet — that only happens once
+`scripts/migrate-demo-users-to-supabase-auth.ts` re-keys them, which is a
+separate, later step. Chicken-and-egg: the migration can't run before the
+script, but the script needs the migration's schema changes (dropped
+`password_hash` etc.) to already be in place. Fixed by adding the
+constraint `NOT VALID` (skips checking existing rows, still enforced for
+every new insert/update from that point on) and having the migration
+script call `VALIDATE CONSTRAINT` as its own last step, once the demo
+users it just re-keyed actually satisfy it. Reproduced the exact failure
+locally first (a throwaway `auth` schema + empty `auth.users` table,
+confirmed byte-for-byte against the real error message), then confirmed
+the `NOT VALID` version succeeds immediately and `VALIDATE CONSTRAINT`
+correctly fails before re-keying and succeeds after, before shipping the
+fix — not just reasoned about abstractly.
+
 **Demo accounts**: `scripts/migrate-demo-users-to-supabase-auth.ts`
 (`pnpm migrate-demo-users`) creates the 3 seeded demo accounts as real
 Supabase Auth users and re-keys their `public.users.id` to match —

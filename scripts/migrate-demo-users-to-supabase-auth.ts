@@ -87,6 +87,27 @@ async function main() {
     console.log(`  -> updated public.users.id: ${existingRow.id} -> ${authUserId}`);
   }
 
+  // db/sql/004_supabase_auth.sql added the FK to auth.users as NOT VALID,
+  // since it can't have been satisfied by any pre-existing row before this
+  // script ran (see that file's comment). Now that the demo users above are
+  // re-keyed, confirm the constraint actually holds for the whole table.
+  // Non-fatal: a stray users row this script doesn't know about (not one of
+  // the 3 demo accounts) would fail this and should be looked at, but
+  // shouldn't make an otherwise-successful run look like it failed.
+  const [{ exists: constraintExists }] = await sql<{ exists: boolean }[]>`
+    select exists (select 1 from pg_constraint where conname = 'users_id_auth_users_id_fk') as exists
+  `;
+  if (constraintExists) {
+    try {
+      await sql`alter table users validate constraint users_id_auth_users_id_fk`;
+      console.log("\nValidated: every public.users row now has a matching auth.users row.");
+    } catch (err) {
+      console.warn(
+        `\nWARNING: could not validate users_id_auth_users_id_fk — some public.users row (not one of the 3 demo accounts) still has no matching auth.users row: ${(err as Error).message}`
+      );
+    }
+  }
+
   await sql.end();
   console.log(`\nDone. Demo accounts are now real Supabase Auth users — sign in with any of the emails above and password "password123".`);
 }
