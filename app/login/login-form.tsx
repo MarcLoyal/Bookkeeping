@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
 import { loginAction } from "./actions";
 
 export function LoginForm() {
@@ -48,6 +49,11 @@ export function LoginForm() {
       >
         {pending ? "Signing in..." : "Sign in"}
       </button>
+      <div className="relative py-2 text-center text-xs text-slate-400">
+        <span className="relative bg-white px-2">or</span>
+        <div className="absolute inset-x-0 top-1/2 -z-10 border-t border-slate-200" />
+      </div>
+      <GoogleSignInButton />
     </form>
   );
 }
