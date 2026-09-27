@@ -28,7 +28,13 @@ import postgres from "postgres";
  * Usage: pnpm create-platform-admin -- <email> "<name>"
  */
 async function main() {
-  const [, , email, name] = process.argv;
+  // Filtering out a literal "--" defensively: `pnpm <script> -- <args>`
+  // (the bare form, without `run`) was observed to forward the separator
+  // itself as argv[2] instead of stripping it — reproduced live: it
+  // arrived as the email argument, sending "--" to Supabase's admin API
+  // and failing with "invalid format". `pnpm run <script> -- <args>` and
+  // plain npm both strip it; this makes the script correct either way.
+  const [email, name] = process.argv.slice(2).filter((arg) => arg !== "--");
   if (!email || !name) {
     console.error('Usage: pnpm create-platform-admin -- <email> "<name>"');
     process.exit(1);
