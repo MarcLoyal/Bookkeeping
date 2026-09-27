@@ -13,9 +13,9 @@ export const periodLocks = pgTable(
     periodEnd: date("period_end").notNull(),
     lockedBy: uuid("locked_by")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => users.id, { onDelete: "restrict", onUpdate: "cascade" }),
     lockedAt: timestamp("locked_at", { withTimezone: true }).notNull().defaultNow(),
-    unlockedBy: uuid("unlocked_by").references(() => users.id, { onDelete: "set null" }),
+    unlockedBy: uuid("unlocked_by").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     unlockedAt: timestamp("unlocked_at", { withTimezone: true }),
     unlockReason: text("unlock_reason"),
   },

@@ -49,12 +49,12 @@ export const journalEntries = pgTable(
     // FK to source_documents deferred to Phase 2 (table not built yet in this phase).
     sourceDocumentId: uuid("source_document_id"),
     status: entryStatusEnum("status").notNull().default("draft"),
-    postedBy: uuid("posted_by").references(() => users.id, { onDelete: "set null" }),
+    postedBy: uuid("posted_by").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     postedAt: timestamp("posted_at", { withTimezone: true }),
     reversalOfEntryId: uuid("reversal_of_entry_id").references((): any => journalEntries.id, {
       onDelete: "set null",
     }),
-    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

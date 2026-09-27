@@ -3,8 +3,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { authDb } from "@/db/authClient";
 import { auditLog, users } from "@/db/schema";
-import { verifyPassword } from "./password";
-import { createSession, destroySession, getSessionClaims } from "./session";
+import { createSupabaseServerClient } from "./supabase-server";
 
 export const loginSchema = z.object({
   email: z.string().email(),
@@ -13,6 +12,13 @@ export const loginSchema = z.object({
 
 export type LoginResult = { ok: true } | { ok: false; error: string };
 
+/** Only when the email matches a real user — an unrecognized email has no firm to attribute a failed attempt to, and would otherwise just be typo/bot noise (see DECISIONS.md, "Audit trail: sign-in events..."). */
+async function logFailedAttempt(email: string, reason: string): Promise<void> {
+  const [row] = await authDb.select().from(users).where(eq(users.email, email)).limit(1);
+  if (!row) return;
+  await authDb.insert(auditLog).values({ actorUserId: row.id, action: "LOGIN_FAILED", tableName: "users", recordId: row.id, reason });
+}
+
 export async function login(input: unknown): Promise<LoginResult> {
   const parsed = loginSchema.safeParse(input);
   if (!parsed.success) {
@@ -20,48 +26,42 @@ export async function login(input: unknown): Promise<LoginResult> {
   }
   const { email, password } = parsed.data;
 
-  // Bypasses RLS by design — see db/authClient.ts. This is the one place in
-  // the app allowed to look up a user by email before a session exists.
-  const [row] = await authDb.select().from(users).where(eq(users.email, email)).limit(1);
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-  // No row at all: don't log anything — there's no user to attribute a
-  // failed attempt to (and no firm for that firm's audit trail to scope
-  // it to), so this is typo/bot noise, not a firm-relevant security event.
-  if (!row) {
+  if (error || !data.user) {
+    await logFailedAttempt(email, "Incorrect password");
     return { ok: false, error: "Invalid email or password." };
   }
 
-  if (!row.active) {
-    await authDb
-      .insert(auditLog)
-      .values({ actorUserId: row.id, action: "LOGIN_FAILED", tableName: "users", recordId: row.id, reason: "Account inactive" });
+  // Bypasses RLS by design — see db/authClient.ts. Looking up this app's own
+  // profile row for a just-verified Supabase Auth identity, before any
+  // session/tenant RLS context exists for it.
+  const [row] = await authDb.select().from(users).where(eq(users.id, data.user.id)).limit(1);
+
+  if (!row || !row.active) {
+    // Supabase's own credential check already succeeded — this account is
+    // deactivated on our side, or has no profile row at all (shouldn't
+    // happen for anyone created through this app's own flows). Either way,
+    // don't leave a valid Supabase session sitting around for an account
+    // this app won't let in.
+    await supabase.auth.signOut();
+    if (row) await logFailedAttempt(email, "Account inactive");
     return { ok: false, error: "Invalid email or password." };
   }
 
-  const valid = await verifyPassword(password, row.passwordHash);
-  if (!valid) {
-    await authDb
-      .insert(auditLog)
-      .values({ actorUserId: row.id, action: "LOGIN_FAILED", tableName: "users", recordId: row.id, reason: "Incorrect password" });
-    return { ok: false, error: "Invalid email or password." };
-  }
-
-  await createSession(row.id, row.tokenVersion);
-  await authDb
-    .insert(auditLog)
-    .values({ actorUserId: row.id, action: "LOGIN", tableName: "users", recordId: row.id });
+  await authDb.insert(auditLog).values({ actorUserId: row.id, action: "LOGIN", tableName: "users", recordId: row.id });
 
   return { ok: true };
 }
 
 export async function logout(): Promise<void> {
-  // Read the session's claims before destroying it, so the logout event can
-  // still be attributed to the right user.
-  const claims = await getSessionClaims();
-  if (claims) {
-    await authDb
-      .insert(auditLog)
-      .values({ actorUserId: claims.userId, action: "LOGOUT", tableName: "users", recordId: claims.userId });
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (user) {
+    await authDb.insert(auditLog).values({ actorUserId: user.id, action: "LOGOUT", tableName: "users", recordId: user.id });
   }
-  await destroySession();
+  await supabase.auth.signOut();
 }

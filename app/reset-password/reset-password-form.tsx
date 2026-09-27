@@ -3,12 +3,11 @@
 import { useActionState } from "react";
 import { resetPasswordAction } from "./actions";
 
-export function ResetPasswordForm({ token }: { token: string }) {
+export function ResetPasswordForm() {
   const [state, formAction, pending] = useActionState(resetPasswordAction, { error: null });
 
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="token" value={token} />
       <div>
         <label htmlFor="password" className="block text-sm font-medium text-slate-700">
           New password

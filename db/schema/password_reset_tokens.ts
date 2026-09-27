@@ -2,11 +2,14 @@ import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { users } from "./firms";
 
 /**
+ * Unused as of the Supabase Auth migration — password reset is now handled
+ * entirely by Supabase (resetPasswordForEmail()/updateUser()), which
+ * doesn't need an app-managed token table. Left in place rather than
+ * dropped (no urgency, and dropping a table is the one kind of schema
+ * change worth being conservative about) — see DECISIONS.md.
+ *
  * RLS is enabled with NO policies (see db/sql migration) — deny-by-default
- * for every role except the schema owner. Only lib/auth/password-reset.ts,
- * via db/authClient.ts's RLS-bypassing connection, ever touches this table —
- * the same pattern login.ts already uses to look up a user before a session
- * exists. The app's normal RLS-bound role has zero access, on purpose.
+ * for every role except the schema owner.
  */
 export const passwordResetTokens = pgTable(
   "password_reset_tokens",
@@ -14,7 +17,7 @@ export const passwordResetTokens = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
     tokenHash: text("token_hash").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),

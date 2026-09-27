@@ -641,6 +641,142 @@ sound — three additions, not a rebuild:
   page and the dashboard's Recent Activity preview, so a firm admin
   notices them without reading every row.
 
+## Phase 1 of real multi-tenancy: migrating to real Supabase Auth
+
+Replaces the dev JWT-cookie shim (`lib/auth/session.ts`, `lib/auth/password.ts`,
+the custom `password_reset_tokens` flow) with real Supabase Auth — the
+originally-documented production target (see "Infrastructure" above),
+now actually wired up. Foundation only: this PR does not add self-serve
+signup, Google sign-in, or platform admins — those are later phases, once
+this is live and verified.
+
+**Architecture correction made before writing any code**: the plan going
+into this assumed RLS's `app_current_user_id()` helper would need to
+switch to reading Supabase's `auth.uid()`. That's wrong for this app's
+architecture — `auth.uid()` only auto-populates on connections that go
+through Supabase's PostgREST layer (which sets `request.jwt.claims` per
+request); this app connects directly via `postgres.js` (`db/client.ts`),
+never through PostgREST. So `app_current_user_id()` and every RLS policy
+are **completely unchanged** — `withUserContext()`'s existing
+transaction-local `app.current_user_id` session variable is still exactly
+how RLS learns who's asking. The only change is *where the verified user
+id comes from*: `supabase.auth.getUser()` (a real round-trip to Supabase's
+Auth server, not just decoding a cookie) instead of verifying our own JWT.
+This is a smaller, safer migration than originally scoped, and a real
+improvement worth flagging: it means zero RLS/SQL-policy churn, and the
+existing local sandbox Postgres needs no Supabase-specific compatibility
+shims to keep the DB-level acceptance tests (including the multi-tenant
+isolation test) running exactly as before.
+
+**Schema**: `users.id` no longer has `defaultRandom()` — it's always
+supplied explicitly now, meant to equal the corresponding
+`auth.users.id`. `password_hash`/`token_version` are dropped (Supabase
+Auth owns both credential storage and session revocation). The FK from
+`public.users.id` to `auth.users.id` (`db/sql/004_supabase_auth.sql`) is
+added **conditionally** — real Supabase Postgres has an `auth` schema,
+this sandbox's local Postgres never will (no local Supabase Auth service
+exists to back it), so the migration checks for `auth.users` before
+adding the constraint. Nothing in the app reads that FK's existence, so
+skipping it locally changes nothing about behavior or tests — it's an
+integrity backstop, not something application logic depends on. The 7
+columns referencing `users.id` (`user_client_assignments.user_id`,
+`audit_log.actor_user_id`, `journal_entries.posted_by`/`created_by`,
+`password_reset_tokens.user_id`, `period_locks.locked_by`/`unlocked_by`)
+all gained `ON UPDATE CASCADE`, so a user's row can be re-keyed to a new
+Supabase Auth UID without losing any history — exactly what
+`scripts/migrate-demo-users-to-supabase-auth.ts` relies on.
+
+**`lib/auth/*` rewrite**: `login()`/`logout()` use
+`signInWithPassword()`/`signOut()`; `getCurrentUser()` uses `getUser()`
+(never `getSession()` — `getSession()` only reads the local cookie
+unverified, `getUser()` round-trips to confirm the token is still valid,
+which matters since this gates every protected page). LOGIN/LOGOUT/
+LOGIN_FAILED audit logging (Phase 0, already shipped) is unchanged in
+behavior, just sourced from Supabase's result instead of our own bcrypt
+check. `password_reset_tokens` is now dead (left in place, not dropped —
+dropping a table is the one kind of schema change worth being
+conservative about) — reset is `resetPasswordForEmail()` +
+`updateUser()`, landing through a new `app/auth/confirm/route.ts`
+(Supabase's documented `verifyOtp()` pattern) that establishes a session
+before redirecting to `/reset-password`, which now needs no token in the
+URL or form — a valid Supabase session there IS the proof the link was
+legitimate. `lib/email/send.ts` and `e2e/password-reset.test.ts` are
+removed — Supabase sends its own reset/confirmation emails now, so the
+whole dev-outbox abstraction has nothing left to do. `middleware.ts`
+follows Supabase's official Next.js App Router session-refresh pattern
+verbatim, rather than improvising one.
+
+**What's still unverified — needs a live Supabase project**: everything
+past `/login` now depends on `supabase.auth.getUser()` succeeding, which
+requires a real `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` and network access
+neither this sandbox has. What *was* verified here: the full unit/
+acceptance test suite (114 tests, unaffected — they call `withUserContext`
+directly with a known id, bypassing the auth layer entirely) still
+passes; `pnpm tsc --noEmit` is clean; `pnpm build` compiles successfully,
+including the Edge-runtime `middleware.ts`. The actual sign-in/reset/
+logout round trip against a real Supabase project — and in particular
+whether Supabase's password-reset email actually links to
+`/auth/confirm` with the `token_hash`/`type` shape this code expects,
+which depends on Supabase's own email template configuration — has not
+been exercised end-to-end and is the main thing to verify together before
+merging.
+
+**Real bug this caught, live**: running `pnpm db:migrate` against a real
+Supabase project failed — `db/sql/004_supabase_auth.sql`'s
+`ADD CONSTRAINT ... FOREIGN KEY (id) REFERENCES auth.users(id)` validates
+every existing row immediately, and the demo firm's 3 pre-existing
+`public.users` rows (created before this migration, under the old auth
+system) have no matching `auth.users` row yet — that only happens once
+`scripts/migrate-demo-users-to-supabase-auth.ts` re-keys them, which is a
+separate, later step. Chicken-and-egg: the migration can't run before the
+script, but the script needs the migration's schema changes (dropped
+`password_hash` etc.) to already be in place. Fixed by adding the
+constraint `NOT VALID` (skips checking existing rows, still enforced for
+every new insert/update from that point on) and having the migration
+script call `VALIDATE CONSTRAINT` as its own last step, once the demo
+users it just re-keyed actually satisfy it. Reproduced the exact failure
+locally first (a throwaway `auth` schema + empty `auth.users` table,
+confirmed byte-for-byte against the real error message), then confirmed
+the `NOT VALID` version succeeds immediately and `VALIDATE CONSTRAINT`
+correctly fails before re-keying and succeeds after, before shipping the
+fix — not just reasoned about abstractly.
+
+**Second bug this caught, live**: with the FK fixed, `pnpm migrate-demo-users`
+got further but then failed on `admin@keepbooks.demo`'s re-key with
+"Posted journal entry ... is immutable. Use a reversing entry instead."
+The `ON UPDATE CASCADE` on `journal_entries.posted_by`/`created_by`
+(added in `db/sql/004_supabase_auth.sql`) touches those columns even on
+already-posted entries — but `enforce_journal_entry_immutability()`'s
+only allowed exception was the reversal status-flip, and even that
+required `posted_by` to stay byte-for-byte unchanged. Checked every
+other `ON UPDATE CASCADE`d column first (`period_locks`, `audit_log`,
+`user_client_assignments`) — none of the rest have an immutability
+trigger, only `journal_entries` does. Fixed in
+`db/sql/005_immutability_allow_user_rekey.sql`: the trigger now allows
+an update where the *only* things that change are `posted_by`/
+`created_by` — status and every financial field (amounts, dates, lines,
+book, reference) must stay exactly as-is, or it's still rejected exactly
+as before. Not a weakening of rule #3: the app itself never runs
+`UPDATE journal_entries SET posted_by = ...` anywhere — only this
+privileged, one-time re-keying script does — so the narrower exception
+doesn't open up anything the running app could exploit. Verified against
+real posted *and* reversed entries in the seeded demo data: reproduced
+the exact reported error first, confirmed the fix lets the re-key cascade
+through on both statuses, then confirmed genuine tampering (changing an
+`entry_date`, editing a `description`) is still rejected on both —
+before reverting the test re-key and shipping.
+
+**Demo accounts**: `scripts/migrate-demo-users-to-supabase-auth.ts`
+(`pnpm migrate-demo-users`) creates the 3 seeded demo accounts as real
+Supabase Auth users and re-keys their `public.users.id` to match —
+idempotent, safe to re-run. Their old bcrypt hashes never carried over
+(there's nowhere for them to go); this script is what makes
+`admin@keepbooks.demo` / `password123` loggable-into again post-migration.
+
+**Removed as dead weight**: `bcryptjs`, `jose` (both unused once
+`lib/auth/session.ts`/`password.ts` are gone), `AUTH_SECRET` (nothing
+reads it anymore).
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

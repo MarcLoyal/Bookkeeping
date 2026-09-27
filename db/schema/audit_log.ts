@@ -8,7 +8,7 @@ export const auditLog = pgTable(
   "audit_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     action: text("action").notNull(), // INSERT | UPDATE | DELETE | custom action name
     tableName: text("table_name").notNull(),
     recordId: text("record_id").notNull(),
