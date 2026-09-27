@@ -8,7 +8,6 @@ export async function resetPasswordAction(
   formData: FormData
 ): Promise<{ error: string | null }> {
   const result = await resetPassword({
-    token: formData.get("token"),
     password: formData.get("password"),
   });
 

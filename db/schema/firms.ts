@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { userRoleEnum } from "./enums";
 import { clients } from "./clients";
 
@@ -12,19 +12,18 @@ export const firms = pgTable("firms", {
 export const users = pgTable(
   "users",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    // No defaultRandom(): this id is always supplied explicitly, matching
+    // the Supabase Auth user (auth.users.id) it's a profile row for — see
+    // db/sql/004_supabase_auth.sql for the FK into the auth schema (Drizzle
+    // doesn't model cross-schema tables, so that FK is hand-authored SQL,
+    // not generated from here).
+    id: uuid("id").primaryKey(),
     firmId: uuid("firm_id").references(() => firms.id, { onDelete: "cascade" }),
     // Set only for role = client_user: which single client this login belongs to.
     clientId: uuid("client_id").references((): any => clients.id, { onDelete: "cascade" }),
     email: text("email").notNull().unique(),
     name: text("name").notNull(),
     role: userRoleEnum("role").notNull(),
-    // Dev auth shim only — see DECISIONS.md. Production swaps this for Supabase Auth.
-    passwordHash: text("password_hash").notNull(),
-    // Embedded as a JWT claim at login; bumped on password reset so every
-    // session token issued before the reset stops verifying (stateless JWTs
-    // have no server-side revocation otherwise — see lib/auth/session.ts).
-    tokenVersion: integer("token_version").notNull().default(0),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -38,7 +37,7 @@ export const userClientAssignments = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
     clientId: uuid("client_id")
       .notNull()
       .references((): any => clients.id, { onDelete: "cascade" }),

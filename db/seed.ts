@@ -33,7 +33,6 @@ import {
 } from "../lib/accounting/posting";
 import { pesosToCentavos } from "../lib/money";
 import { ANNUAL_WITHHOLDING_TAX_BRACKETS_2023 } from "../lib/tax/withholding-compensation";
-import { hashPassword } from "../lib/auth/password";
 
 const connectionString = process.env.MIGRATION_DATABASE_URL;
 if (!connectionString) throw new Error("MIGRATION_DATABASE_URL is not set.");
@@ -73,35 +72,40 @@ async function main() {
   console.log("Creating firm + users...");
   const [firm] = await db.insert(firms).values({ name: "Keep.Books Demo Firm" }).returning();
 
-  const demoPassword = await hashPassword("password123");
+  // No passwordHash: real credential verification is Supabase Auth's job
+  // now (see DECISIONS.md). These ids are throwaway local-only UUIDs — the
+  // demo-user migration script (scripts/migrate-demo-users-to-supabase-auth.ts)
+  // is what makes these accounts actually loggable-into, by creating
+  // matching Supabase Auth users and updating these rows' ids to match
+  // (relies on the ON UPDATE CASCADE added in db/sql/004_supabase_auth.sql).
   const [admin] = await db
     .insert(users)
     .values({
+      id: crypto.randomUUID(),
       firmId: firm.id,
       email: "admin@keepbooks.demo",
       name: "Marc (Firm Admin)",
       role: "firm_admin",
-      passwordHash: demoPassword,
     })
     .returning();
   const [bookkeeper] = await db
     .insert(users)
     .values({
+      id: crypto.randomUUID(),
       firmId: firm.id,
       email: "bookkeeper@keepbooks.demo",
       name: "Bea Bookkeeper",
       role: "bookkeeper",
-      passwordHash: demoPassword,
     })
     .returning();
   const [reviewer] = await db
     .insert(users)
     .values({
+      id: crypto.randomUUID(),
       firmId: firm.id,
       email: "reviewer@keepbooks.demo",
       name: "Rey Reviewer",
       role: "reviewer",
-      passwordHash: demoPassword,
     })
     .returning();
 

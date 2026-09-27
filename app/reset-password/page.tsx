@@ -1,17 +1,16 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/current-user";
+import { createSupabaseServerClient } from "@/lib/auth/supabase-server";
 import { ResetPasswordForm } from "./reset-password-form";
 
-export default async function ResetPasswordPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ token?: string }>;
-}) {
-  const user = await getCurrentUser();
-  if (user) redirect("/dashboard");
-
-  const { token } = await searchParams;
+export default async function ResetPasswordPage() {
+  // A valid Supabase session here means the emailed link was already
+  // verified by app/auth/confirm/route.ts (or the visitor is already
+  // logged in and chose to set a new password, which is equally fine to
+  // allow) — no separate token to check ourselves.
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-50 px-4">
@@ -30,10 +29,10 @@ export default async function ResetPasswordPage({
           </div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">Set a new password</h1>
         </div>
-        {token ? (
-          <ResetPasswordForm token={token} />
+        {user ? (
+          <ResetPasswordForm />
         ) : (
-          <p className="text-sm text-red-600">This reset link is missing its token.</p>
+          <p className="text-sm text-red-600">This reset link is invalid or has expired.</p>
         )}
         <p className="mt-6 text-center text-sm text-slate-500">
           <Link href="/login" className="font-medium text-slate-900 hover:underline">

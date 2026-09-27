@@ -282,7 +282,6 @@ describe("acceptance #6: Client A's user receives zero rows when querying Client
       email: `acceptance-test-client-a-${clientAUserId}@example.invalid`,
       name: "Acceptance Test — Client A User",
       role: "client_user",
-      passwordHash: "not-a-real-hash",
     });
 
     try {
