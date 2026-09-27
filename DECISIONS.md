@@ -1266,6 +1266,15 @@ level, rather than continuing to debug the one-off CLI path — that's the
 pipeline actually used going forward anyway (production deploys happen
 via Git push to `main`, not local `vercel deploy`).
 
+**Update**: confirmed via `vercel env ls` that the Preview-scoped vars
+exist with correct values, and a manual `vercel deploy --force` (fresh
+build, cache off) still showed the identical error. Rules out a stale
+cache or a scoping/typo mistake as the cause on the CLI side, and
+strengthens rather than weakens the suspicion above — this now looks
+specific to the manual CLI deploy pipeline itself, not the env var
+configuration. This commit exists to trigger a fresh Git-integrated
+preview build for PR #22 as the next, cleaner data point.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
