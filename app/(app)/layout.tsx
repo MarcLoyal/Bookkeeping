@@ -50,6 +50,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                   Audit Log
                 </Link>
               )}
+              {user?.role === "platform_admin" && (
+                <Link href="/settings/platform-admins" prefetch={false} className="hover:text-slate-900">
+                  Platform Admins
+                </Link>
+              )}
             </nav>
           </div>
           <div className="flex items-center gap-3 text-sm">

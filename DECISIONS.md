@@ -1366,6 +1366,82 @@ rather than just re-reading the source and assuming. The live Vercel
 deployment is still unverified from this sandbox (no egress) — next step
 is a real preview build with real credentials.
 
+## Phase 3, part 3: invite other platform admins
+
+`/settings/platform-admins` — visible only to `platform_admin` (new
+`requirePlatformAdmin()` guard, mirroring `requireFirmAdmin()`). Lists
+current platform admins and lets one invite another by email + name.
+This is the piece explicitly deferred out of the earlier `platform_admin`
+PR, now that there's an actual first admin to use it.
+
+**New RLS, finally added** (`db/sql/006_platform_admin_rls.sql`): two
+narrow, additive policies letting an authenticated `platform_admin` see
+and insert *other* `platform_admin` rows (`firm_id IS NULL` on both
+sides) through the normal `withUserContext()` path — the carve-out
+flagged as deferred in the previous PR's `DECISIONS.md` entry. Postgres
+combines multiple permissive policies per command with OR, so these add
+to the existing `users_select`/`users_insert` rather than replacing them.
+**Verified live** against the local sandbox database, not just written
+and trusted: seeded two platform admin rows via the schema-owning role
+(mirroring how `create-platform-admin.ts` actually bootstraps), then, as
+the real RLS-enforcing `keepbooks_app` role with `app.current_user_id`
+set to one of them, confirmed all four properties hold — sees both
+existing platform admins (not just itself), can insert a third, sees
+zero firm-scoped users, and a crafted attempt to insert a `firm_admin`
+row for an arbitrary firm is rejected outright by RLS.
+
+**Why the profile-row insert goes through normal RLS but the pre-check
+doesn't**: creating the new admin's `public.users` row is done by an
+*already-authenticated* platform admin with a real session — unlike the
+bootstrap cases `authDb` exists for (signup, first-admin creation),
+there's nothing circular here, so it goes through
+`withUserContext(currentAdminId, ...)` like any other authenticated
+write, relying on the new policy above. But checking whether the
+invited email is *already registered anywhere* is inherently
+cross-tenant — no RLS-scoped session, platform admin included, can
+correctly answer "does this email exist in any firm" through RLS (a
+bare query would just see nothing, silently letting a collision through
+to fail confusingly later at the DB's unique constraint instead). That
+one check uses `authDb`, added as a fifth listed legitimate caller in
+`db/authClient.ts`'s doc comment.
+
+**`supabase.auth.admin.createUser()`, not `inviteUserByEmail()`** — a
+deliberate change from what was suggested when this was first flagged
+as a follow-up. `createUser()` is the exact mechanism
+`scripts/create-platform-admin.ts` already uses and that's already been
+verified live (the first admin account). `inviteUserByEmail()` would
+introduce a new, untested code path (Supabase's invite email template,
+its own `redirectTo`) for no real benefit — the invited admin is simply
+told, after a successful invite, to sign in with "Continue with Google"
+using that email, exactly like the first admin was onboarded. No
+password is set, consistent with every platform admin so far.
+
+**`lib/auth/supabase-admin.ts`** (new): the first time the *running app*
+(not a standalone script) holds `SUPABASE_SERVICE_ROLE_KEY`. Reads its
+env vars as static literal `process.env.X` expressions, not through a
+`requireEnv(name)` helper — that pattern caused two real, separately-
+diagnosed bugs earlier this phase (see the "Root cause, finally" entry
+above) and isn't being reintroduced anywhere in this codebase again,
+even in a Node-only file like this one that was never actually at risk
+from it.
+
+**Deliberately out of this page**: deactivating or removing an admin.
+Only invite + list are built. Revisit when there's an actual need to
+remove one rather than building it speculatively now.
+
+**Verified**: the RLS policies (live, as above); the invite schema
+(`email` + `name`) via a standalone script exercising valid/invalid
+cases, same precedent as `signupSchema` (can't import
+`invite-platform-admin.ts` directly outside Next.js — it's guarded by
+`"server-only"`). Full test suite (117, unchanged — no new pure logic
+beyond the schema, already covered above), `tsc --noEmit`, and
+`pnpm build` (picked up `/settings/platform-admins`) all pass. The
+actual live invite flow — a real `createUser()` call reaching Supabase,
+and the invited admin actually signing in with Google afterward — is
+unverified from this sandbox (no egress to a real Supabase project);
+opened as a draft PR pending a live walkthrough with a second real
+email address.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
