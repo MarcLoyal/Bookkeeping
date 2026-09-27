@@ -16,8 +16,14 @@ import { auditLog, firms, users } from "@/db/schema";
  * created the user during the OAuth callback and this just needs a firm
  * name to finish the profile).
  */
-export async function createFirmForUser(input: { userId: string; email: string; name: string; firmName: string }) {
-  const { userId, email, name, firmName } = input;
+export async function createFirmForUser(input: {
+  userId: string;
+  email: string;
+  name: string;
+  firmName: string;
+  signupMethod: "email" | "google";
+}) {
+  const { userId, email, name, firmName, signupMethod } = input;
   return authDb.transaction(async (tx) => {
     const [firm] = await tx.insert(firms).values({ name: firmName }).returning();
     await tx.insert(users).values({
@@ -26,6 +32,7 @@ export async function createFirmForUser(input: { userId: string; email: string; 
       email,
       name,
       role: "firm_admin",
+      signupMethod,
     });
     await tx.insert(auditLog).values({ actorUserId: userId, action: "SIGNUP", tableName: "firms", recordId: firm.id });
     return firm;

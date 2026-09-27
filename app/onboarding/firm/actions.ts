@@ -38,6 +38,7 @@ export async function completeOnboardingAction(
       email: pending.email,
       name: parsed.data.name,
       firmName: parsed.data.firmName,
+      signupMethod: "google",
     });
   } catch (err) {
     console.error("Onboarding DB step failed for a Google identity:", err);

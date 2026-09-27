@@ -1,5 +1,5 @@
 import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { userRoleEnum } from "./enums";
+import { signupMethodEnum, userRoleEnum } from "./enums";
 import { clients } from "./clients";
 
 export const firms = pgTable("firms", {
@@ -25,6 +25,10 @@ export const users = pgTable(
     name: text("name").notNull(),
     role: userRoleEnum("role").notNull(),
     active: boolean("active").notNull().default(true),
+    // Set once at account creation for a firm's owner (email/password
+    // signup vs. Google) — see db/schema/enums.ts's signupMethodEnum doc
+    // comment. NULL for every other kind of row.
+    signupMethod: signupMethodEnum("signup_method"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("users_firm_id_idx").on(t.firmId), index("users_client_id_idx").on(t.clientId)]

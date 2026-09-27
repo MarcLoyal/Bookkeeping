@@ -43,6 +43,13 @@
       "when": 1790521151081,
       "tag": "0005_curved_stark_industries",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790536452019,
+      "tag": "0006_conscious_raider",
+      "breakpoints": true
     }
   ]
 }

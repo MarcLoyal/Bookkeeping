@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getFirmDashboardStats } from "@/lib/data/dashboard";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
+import { getPlatformStats, listFirmsForDashboard } from "@/lib/data/platform-dashboard";
 import { QuickPostPicker } from "./quick-post-picker";
+import { PlatformFirmsTable } from "./platform-firms-table";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
@@ -15,21 +17,54 @@ export default async function DashboardPage() {
   }
 
   // Not scoped to any firm (firmId is NULL) — the firm-scoped queries below
-  // would just return empty for them, which reads as a broken/empty "Firm
-  // Dashboard" rather than the accurate "there's nothing firm-shaped here."
-  // No dedicated admin dashboard yet (see DECISIONS.md) — this placeholder
-  // avoids the misleading empty state until one exists.
+  // would just return empty for them, so this is a genuinely separate view
+  // rather than reusing the firm dashboard's queries.
   if (user.role === "platform_admin") {
+    const [stats, firmRows] = await Promise.all([getPlatformStats(user.id), listFirmsForDashboard(user.id)]);
+
     return (
-      <div className="space-y-2">
-        <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
-        <p className="text-sm text-slate-600">
-          Signed in as {user.name}. No firm-level dashboard applies here —{" "}
-          <Link href="/settings/platform-admins" className="underline">
-            manage platform admins
-          </Link>{" "}
-          from the nav above.
-        </p>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
+          <Link href="/settings/platform-admins" className="text-sm text-slate-600 hover:underline">
+            Manage platform admins →
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Total Firms</div>
+            <div className="mt-1 text-2xl font-bold">{stats.totalFirms}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Active Users (all firms)</div>
+            <div className="mt-1 text-2xl font-bold">{stats.totalActiveUsers}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">New Firms This Week</div>
+            <div className="mt-1 text-2xl font-bold">{stats.newFirmsThisWeek}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">New Firms This Month</div>
+            <div className="mt-1 text-2xl font-bold">{stats.newFirmsThisMonth}</div>
+          </div>
+        </div>
+
+        {stats.signupMethodBreakdown.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+            <span className="font-medium text-slate-700">Signups by method:</span>
+            {stats.signupMethodBreakdown.map(({ method, count }) => (
+              <span key={method} className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                {method === "email" ? "Email" : method === "google" ? "Google" : "Unknown"}: {count}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-slate-900">Firms &amp; Bookkeepers</h2>
+          <PlatformFirmsTable rows={firmRows} />
+        </div>
       </div>
     );
   }

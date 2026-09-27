@@ -84,3 +84,9 @@ export const payFrequencyEnum = pgEnum("pay_frequency", ["monthly", "semi_monthl
 // year-end mandatory 13th month pay run (PD 851), computed and taxed
 // differently from a regular period — see lib/tax/payslip.ts.
 export const payrollRunTypeEnum = pgEnum("payroll_run_type", ["regular", "thirteenth_month"]);
+
+// How a firm's owner (its first firm_admin) actually signed up — set once
+// at account creation (lib/auth/signup.ts / app/onboarding/firm/actions.ts)
+// and never changed. NULL for rows that predate this column (demo seed
+// data, platform admins) or aren't a firm's owner at all.
+export const signupMethodEnum = pgEnum("signup_method", ["email", "google"]);
