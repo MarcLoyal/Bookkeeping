@@ -1537,6 +1537,139 @@ view beyond the current row-expansion (firm ID, owner email, full
 signup/last-active timestamps) — both flagged as follow-ups when this
 was scoped, not overlooked.
 
+## Dashboard health indicators + platform growth chart
+
+Two small phases, built together per an explicit go-ahead: activity-health
+badges + a growth chart on the platform admin dashboard, and a client
+activity badge + a needs-attention feed on the bookkeeper dashboard. A
+third piece (BIR deadlines widget) was scoped in the same conversation
+but deliberately held for its own pass — real due-date domain logic,
+wanted its own confirmation round before being built.
+
+**`lib/activity-health.ts`**: one pure function
+(`activityHealthFor(lastActiveAt, now)` → `active | quiet | dormant |
+never`, 7/14-day thresholds) shared by both dashboards — a platform
+admin's firms table feeds it each firm's last LOGIN; the bookkeeper
+dashboard feeds it each client's most recent journal entry. Same
+three-tier read on "how long since something happened here" in both
+places, just a different timestamp. `components/activity-badge.tsx`
+renders it as a small colored dot + label. Verified the day-boundary
+math directly (7.0 days = active, 7.01 = quiet, 14.0 = quiet, 14.01 =
+dormant, etc.) via a standalone script — boundary conditions are exactly
+where this kind of thing gets built wrong.
+
+**Growth chart — no new dependency.** Checked first: no charting library
+exists anywhere in this app. Built a plain inline SVG bar chart instead
+of introducing one for an 8-12-bar view — thin bars, rounded data-ends,
+per-bar hover/focus tooltip (mouse and keyboard), `aria-label` per bar
+standing in for a separate table view given how few data points there
+are. Loaded the dataviz skill before writing it (its own trigger: "any
+chart, in any output medium, including inline SVG") and used its
+validated sequential-blue default (`#2a78d6`) for the single series,
+re-validated with the palette script against this app's actual white
+surface rather than the skill's own default surface, per the skill's own
+instruction to do so. No dark mode: this app has none anywhere, so this
+chart doesn't invent one either.
+
+**Weekly bucketing had a real trap, caught before it shipped wrong**:
+Postgres's `date_trunc('week', ...)` is always ISO/Monday-based. This
+file already had a `startOfWeek()` helper for the "new firms this week"
+stat card that rolls back to *Sunday* — fine for that label, wrong for
+this chart if reused. Wrote a separate `mondayOfWeek()` specifically for
+the zero-filled week-bucket list this query generates, and verified live
+that it produces the identical date Postgres's own `date_trunc` does for
+a real seeded firm's `created_at`, not just that the two looked
+plausible in isolation.
+
+**Client status + needs-attention feed — no new grants, mostly reused
+code.** `getClientLastActivity()` (new, `lib/data/dashboard.ts`) is a
+plain `GROUP BY` over `journal_entries` through the existing RLS a
+bookkeeper/reviewer/firm_admin already has — no new policy needed, this
+was never gated the way the platform-admin side was. The needs-attention
+feed doesn't introduce a query at all: `listFirmDrafts()` already
+existed (built for the `/drafts` page and the "Unposted Drafts" stat
+card) and is exactly "drafts across every client, oldest first" — reused
+as-is, just capped to 6 rows for the dashboard widget. Added to the
+dashboard's right column for every staff role, not just `firm_admin`
+(who previously had the only thing there, "Recent Activity" from the
+audit log) — bookkeeper/reviewer had an empty gap in that column before
+this, now filled.
+
+**Verified**: activity-health boundaries and week-bucket alignment via
+standalone scripts (both above); `getClientLastActivity()`'s grouping
+verified live against real local seed data (3 clients, distinct
+`journal_entries` timestamps) as the actual firm_admin session, RLS
+correctly scoping to just that firm's clients. Full test suite (117,
+unchanged), `tsc --noEmit`, and `pnpm build` all pass — no new routes,
+everything lives inside the existing `/dashboard` page for both roles.
+
+## Phase 3: BIR deadlines widget
+
+`/dashboard`'s new first section for bookkeeper/firm_admin/reviewer:
+every active client's current filing obligation, across every applicable
+BIR form, sorted soonest-due first, with overdue/due-soon flagged
+visually. The due-date rules and the "derive from client profile, not
+`client_tax_types`" data-source decision were both confirmed with the
+product owner in a prior planning round, before any of this was written.
+
+**`lib/tax/bir-deadlines.ts`** — new, pure, real vitest coverage (21
+tests) matching this project's existing rigor for `lib/tax/*.ts` (this
+is compliance-relevant date math, not cosmetic UI logic, so it gets the
+same treatment as the VAT/withholding/income-tax modules already tested
+this way — not a lighter-touch standalone script). Two pieces:
+
+- `applicableForms(client)`: which of the 7 confirmed forms a client
+  files, derived from `vatStatus`/`taxpayerType`/`withholdingAgent` —
+  fields captured for every real client at onboarding, unlike
+  `client_tax_types` (see the earlier "does the data model support this"
+  research: that table's own schema comment says it "drives the
+  compliance calendar," but nothing in this app has ever read or written
+  it for a real client, only demo seed data).
+- `currentDeadlineFor(formCode, today, fiscalYearEndMonth)`: the
+  current/nearest obligation for one form. 2550Q/2551Q/1601-EQ are
+  always calendar-quarter based (VAT/percentage/withholding periods
+  don't follow a fiscal year even for a fiscal-year corporation);
+  1701Q/1701A are fixed calendar dates (individuals can't elect a fiscal
+  year under Philippine tax law); 1702Q/1702-RT are fiscal-year-aware,
+  tested against both a calendar (Dec) and a non-calendar (June 30)
+  fiscal year end, including the transition right after each one's own
+  annual close.
+
+**A real, disclosed simplification**: `taxpayerType: "partnership"` is
+treated as filing corporate-type forms (1702Q/1702-RT) — correct for an
+ordinary business partnership, wrong for a General Professional
+Partnership (GPP), which isn't taxed at the entity level at all. This
+app has no field distinguishing the two. Documented in the module's own
+doc comment, not silently assumed away — a GPP is a real but
+comparatively rare case among typical bookkeeping-firm clients.
+
+**What this widget is not**: a record of what's actually been filed.
+This app has no filing-status tracking anywhere on any client — so
+"overdue" here means "the calendar due date has passed," not "confirmed
+not filed." Stated plainly in the widget component's own doc comment.
+Only `status = 'active'` clients are included — onboarding clients may
+not have a finalized tax profile yet, inactive ones are no longer being
+serviced.
+
+**`lib/data/deadlines.ts`**: assembles the flat, sorted list — active
+clients through existing RLS (no new grant; a bookkeeper/reviewer/
+firm_admin already sees exactly the clients they should), each run
+through `applicableForms()` + `currentDeadlineFor()`, sorted by due date.
+
+**Verified end-to-end against real local seed data**, not just unit
+tests in isolation: pulled the 3 seeded clients' actual tax-profile
+columns via `psql`, fed them through the real `applicableForms()`/
+`currentDeadlineFor()` functions in a standalone script, and confirmed
+all 7 expected forms appeared, correctly attributed to the right
+clients, correctly sorted, with the onboarding-status client correctly
+excluded — including a real, naturally-occurring overdue case (a
+corporation's 1702-RT, due back in April, correctly sorting to the top
+as the most overdue item relative to today).
+
+**Verified**: 21 new tests (138 total, up from 117), `tsc --noEmit`,
+`pnpm build` all pass — no new routes, lives inside the existing
+`/dashboard` page.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

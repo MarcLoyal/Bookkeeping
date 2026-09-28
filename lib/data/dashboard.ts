@@ -1,5 +1,5 @@
 import "server-only";
-import { asc, count, eq } from "drizzle-orm";
+import { asc, count, eq, sql } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { clients, journalEntries } from "@/db/schema";
 
@@ -12,6 +12,17 @@ export async function getFirmDashboardStats(userId: string) {
       .where(eq(journalEntries.status, "draft"));
 
     return { clients: clientRows, draftCount };
+  });
+}
+
+/** Most recent journal_entries.createdAt per client this user can access — the "how recently was this client worked on" signal behind each client's activity badge. Clients with no entries yet just don't appear in the map. */
+export async function getClientLastActivity(userId: string): Promise<Map<string, Date>> {
+  return withUserContext(userId, async (tx) => {
+    const rows = await tx
+      .select({ clientId: journalEntries.clientId, lastActivity: sql<Date>`max(${journalEntries.createdAt})` })
+      .from(journalEntries)
+      .groupBy(journalEntries.clientId);
+    return new Map(rows.map((r) => [r.clientId, r.lastActivity]));
   });
 }
 

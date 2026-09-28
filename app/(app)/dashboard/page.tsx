@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/current-user";
-import { getFirmDashboardStats } from "@/lib/data/dashboard";
+import { getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
-import { getPlatformStats, listFirmsForDashboard } from "@/lib/data/platform-dashboard";
+import { listUpcomingDeadlines } from "@/lib/data/deadlines";
+import { getFirmSignupsByWeek, getPlatformStats, listFirmsForDashboard } from "@/lib/data/platform-dashboard";
+import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
+import { PlatformGrowthChart } from "./platform-growth-chart";
+import { DeadlinesWidget } from "./deadlines-widget";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
@@ -20,7 +24,11 @@ export default async function DashboardPage() {
   // would just return empty for them, so this is a genuinely separate view
   // rather than reusing the firm dashboard's queries.
   if (user.role === "platform_admin") {
-    const [stats, firmRows] = await Promise.all([getPlatformStats(user.id), listFirmsForDashboard(user.id)]);
+    const [stats, firmRows, weeklySignups] = await Promise.all([
+      getPlatformStats(user.id),
+      listFirmsForDashboard(user.id),
+      getFirmSignupsByWeek(user.id, 10),
+    ]);
 
     return (
       <div className="space-y-6">
@@ -30,6 +38,8 @@ export default async function DashboardPage() {
             Manage platform admins →
           </Link>
         </div>
+
+        <PlatformGrowthChart data={weeklySignups} />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -69,11 +79,15 @@ export default async function DashboardPage() {
     );
   }
 
-  const [{ clients, draftCount }, recentActivity] = await Promise.all([
+  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
     getFirmDashboardStats(user.id),
     user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
+    getClientLastActivity(user.id),
+    listFirmDrafts(user.id),
+    listUpcomingDeadlines(user.id),
   ]);
   const active = clients.filter((c) => c.status === "active").length;
+  const needsAttention = drafts.slice(0, 6);
 
   return (
     <div className="space-y-6">
@@ -91,6 +105,8 @@ export default async function DashboardPage() {
           </div>
         )}
       </div>
+
+      <DeadlinesWidget deadlines={upcomingDeadlines} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Link href="/clients?status=active" className="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
@@ -142,11 +158,14 @@ export default async function DashboardPage() {
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-600">{c.tin}</td>
                     <td className="px-4 py-3 capitalize text-slate-700">{c.status}</td>
+                    <td className="px-4 py-3">
+                      <ActivityBadge lastActiveAt={clientLastActivity.get(c.id) ?? null} />
+                    </td>
                   </tr>
                 ))}
                 {clients.length === 0 && (
                   <tr>
-                    <td className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
                       No clients yet. <Link href="/clients/new" className="underline">Create one</Link>.
                     </td>
                   </tr>
@@ -156,31 +175,59 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {user.role === "firm_admin" && (
+        <div className="space-y-6">
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-900">Recent Activity</h2>
-              <Link href="/settings/audit-log" className="text-sm text-slate-600 hover:underline">
+              <h2 className="text-sm font-semibold text-slate-900">Needs Attention</h2>
+              <Link href="/drafts" className="text-sm text-slate-600 hover:underline">
                 View all →
               </Link>
             </div>
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
               <ul className="divide-y divide-slate-100">
-                {recentActivity.map((a) => (
-                  <li key={a.id} className="px-4 py-3 text-sm">
-                    <div className={a.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : "text-slate-900"}>{a.description}</div>
+                {needsAttention.map((d) => (
+                  <li key={d.id} className="px-4 py-3 text-sm">
+                    <Link href={`/clients/${d.clientId}/transactions/${d.id}`} className="font-medium text-slate-900 hover:underline">
+                      {d.description}
+                    </Link>
                     <div className="mt-0.5 text-xs text-slate-600">
-                      {a.actorName} · {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}
+                      {d.clientName} · <span className="text-amber-700">Draft</span> · {d.entryDate}
                     </div>
                   </li>
                 ))}
-                {recentActivity.length === 0 && (
-                  <li className="px-4 py-8 text-center text-sm text-slate-500">No activity logged yet.</li>
+                {needsAttention.length === 0 && (
+                  <li className="px-4 py-8 text-center text-sm text-slate-500">Nothing unposted — you're caught up.</li>
                 )}
               </ul>
             </div>
           </div>
-        )}
+
+          {user.role === "firm_admin" && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900">Recent Activity</h2>
+                <Link href="/settings/audit-log" className="text-sm text-slate-600 hover:underline">
+                  View all →
+                </Link>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <ul className="divide-y divide-slate-100">
+                  {recentActivity.map((a) => (
+                    <li key={a.id} className="px-4 py-3 text-sm">
+                      <div className={a.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : "text-slate-900"}>{a.description}</div>
+                      <div className="mt-0.5 text-xs text-slate-600">
+                        {a.actorName} · {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}
+                      </div>
+                    </li>
+                  ))}
+                  {recentActivity.length === 0 && (
+                    <li className="px-4 py-8 text-center text-sm text-slate-500">No activity logged yet.</li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

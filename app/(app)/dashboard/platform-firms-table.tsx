@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import type { FirmDashboardRow } from "@/lib/data/platform-dashboard";
+import { ActivityBadge } from "@/components/activity-badge";
 
 const SIGNUP_METHOD_LABELS: Record<string, string> = { email: "Email", google: "Google" };
 
@@ -39,6 +40,7 @@ export function PlatformFirmsTable({ rows }: { rows: FirmDashboardRow[] }) {
               <th className="px-4 py-2">Method</th>
               <th className="px-4 py-2">Clients</th>
               <th className="px-4 py-2">Last active</th>
+              <th className="px-4 py-2">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -67,10 +69,13 @@ export function PlatformFirmsTable({ rows }: { rows: FirmDashboardRow[] }) {
                   <td className="px-4 py-2 text-xs text-slate-500">
                     {firm.lastActiveAt ? formatDate(firm.lastActiveAt) : <span className="text-slate-400">Never</span>}
                   </td>
+                  <td className="px-4 py-2">
+                    <ActivityBadge lastActiveAt={firm.lastActiveAt} />
+                  </td>
                 </tr>
                 {expandedId === firm.id && (
                   <tr key={`${firm.id}-detail`} className="bg-slate-50">
-                    <td colSpan={6} className="px-4 py-3 text-xs text-slate-600">
+                    <td colSpan={7} className="px-4 py-3 text-xs text-slate-600">
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-4">
                         <div>
                           <span className="font-medium text-slate-500">Firm ID</span>
@@ -97,7 +102,7 @@ export function PlatformFirmsTable({ rows }: { rows: FirmDashboardRow[] }) {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-6 text-center text-slate-400">
                   {rows.length === 0 ? "No firms signed up yet." : "No firms match your search."}
                 </td>
               </tr>
