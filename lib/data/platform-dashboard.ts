@@ -1,13 +1,15 @@
 import "server-only";
-import { asc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { firms, users } from "@/db/schema";
 
+export type PeriodStat = { current: number; previous: number };
+
 export type PlatformStats = {
-  totalFirms: number;
-  totalActiveUsers: number;
-  newFirmsThisWeek: number;
-  newFirmsThisMonth: number;
+  totalFirms: PeriodStat;
+  totalActiveUsers: PeriodStat;
+  newFirmsThisWeek: PeriodStat;
+  newFirmsThisMonth: PeriodStat;
   signupMethodBreakdown: { method: string; count: number }[];
 };
 
@@ -53,22 +55,49 @@ function mondayOfWeek(d: Date): Date {
 export async function getPlatformStats(currentAdminId: string): Promise<PlatformStats> {
   return withUserContext(currentAdminId, async (tx) => {
     const now = new Date();
+    const weekStart = startOfWeek(now);
+    const prevWeekStart = new Date(weekStart);
+    prevWeekStart.setUTCDate(prevWeekStart.getUTCDate() - 7);
+    const monthStart = startOfMonth(now);
+    const prevMonthStart = new Date(monthStart);
+    prevMonthStart.setUTCMonth(prevMonthStart.getUTCMonth() - 1);
 
     const [{ count: totalFirms }] = await tx.select({ count: sql<number>`count(*)::int` }).from(firms);
+    const [{ count: totalFirmsPrevWeek }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(firms)
+      .where(lt(firms.createdAt, weekStart));
 
+    // "Previous period" for active users is an approximation, not a stored
+    // snapshot: this app has no historical time series for account status.
+    // platform_active_users_before(cutoff) counts *currently* active users
+    // that already existed before cutoff — a reasonable proxy given active
+    // flips rarely (deactivation isn't a routine weekly event), but not an
+    // exact "active users as of that date" figure. See 008_platform_dashboard_deltas.sql.
     const [{ value: totalActiveUsers }] = (await tx.execute(
       sql`select platform_total_active_users() as value`
+    )) as unknown as { value: number }[];
+    const [{ value: totalActiveUsersPrevWeek }] = (await tx.execute(
+      sql`select platform_active_users_before(${weekStart.toISOString()}) as value`
     )) as unknown as { value: number }[];
 
     const [{ count: newFirmsThisWeek }] = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(firms)
-      .where(gte(firms.createdAt, startOfWeek(now)));
+      .where(gte(firms.createdAt, weekStart));
+    const [{ count: newFirmsPrevWeek }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(firms)
+      .where(and(gte(firms.createdAt, prevWeekStart), lt(firms.createdAt, weekStart)));
 
     const [{ count: newFirmsThisMonth }] = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(firms)
-      .where(gte(firms.createdAt, startOfMonth(now)));
+      .where(gte(firms.createdAt, monthStart));
+    const [{ count: newFirmsPrevMonth }] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(firms)
+      .where(and(gte(firms.createdAt, prevMonthStart), lt(firms.createdAt, monthStart)));
 
     const owners = await tx.select({ signupMethod: users.signupMethod }).from(users).where(eq(users.role, "firm_admin"));
     const breakdown = new Map<string, number>();
@@ -78,10 +107,10 @@ export async function getPlatformStats(currentAdminId: string): Promise<Platform
     }
 
     return {
-      totalFirms,
-      totalActiveUsers,
-      newFirmsThisWeek,
-      newFirmsThisMonth,
+      totalFirms: { current: totalFirms, previous: totalFirmsPrevWeek },
+      totalActiveUsers: { current: totalActiveUsers, previous: totalActiveUsersPrevWeek },
+      newFirmsThisWeek: { current: newFirmsThisWeek, previous: newFirmsPrevWeek },
+      newFirmsThisMonth: { current: newFirmsThisMonth, previous: newFirmsPrevMonth },
       signupMethodBreakdown: Array.from(breakdown, ([method, count]) => ({ method, count })),
     };
   });
@@ -111,6 +140,37 @@ export async function getFirmSignupsByWeek(currentAdminId: string, weeks = 10): 
       weekStart.setUTCDate(weekStart.getUTCDate() - i * 7);
       const key = weekStart.toISOString().slice(0, 10);
       buckets.push({ weekStart: key, count: byWeek.get(key) ?? 0 });
+    }
+    return buckets;
+  });
+}
+
+export type CumulativeFirms = { weekStart: string; total: number };
+
+/**
+ * Running total of firms as of the end of each of the last `weeks` ISO
+ * weeks (i.e. cumulative signups, not new signups — see
+ * getFirmSignupsByWeek for the weekly deltas this is the running sum of).
+ * One COUNT per week rather than a window function: mirrors this file's
+ * existing preference for the simpler, more obviously-correct form over a
+ * denser single query (see listFirmsForDashboard's owner-per-firm comment)
+ * — this only ever runs for a small, fixed number of weeks.
+ */
+export async function getCumulativeFirmsByWeek(currentAdminId: string, weeks = 10): Promise<CumulativeFirms[]> {
+  return withUserContext(currentAdminId, async (tx) => {
+    const now = new Date();
+    const buckets: CumulativeFirms[] = [];
+    for (let i = weeks - 1; i >= 0; i--) {
+      const weekEnd = mondayOfWeek(now);
+      weekEnd.setUTCDate(weekEnd.getUTCDate() - i * 7 + 7);
+      const cutoff = weekEnd < now ? weekEnd : now;
+      const [{ count }] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(firms)
+        .where(lt(firms.createdAt, cutoff));
+      const weekStart = mondayOfWeek(now);
+      weekStart.setUTCDate(weekStart.getUTCDate() - i * 7);
+      buckets.push({ weekStart: weekStart.toISOString().slice(0, 10), total: count });
     }
     return buckets;
   });

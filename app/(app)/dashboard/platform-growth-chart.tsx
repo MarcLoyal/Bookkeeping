@@ -25,7 +25,7 @@ export function PlatformGrowthChart({ data }: { data: { weekStart: string; count
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">New Firm Signups (last {data.length} weeks)</h2>
+        <h3 className="text-xs font-medium uppercase tracking-wide text-slate-600">New Firm Signups (last {data.length} weeks)</h3>
         {activeIndex !== null && (
           <span className="text-xs text-slate-500">
             Week of {shortDate(data[activeIndex].weekStart)}: <span className="font-semibold text-slate-700">{data[activeIndex].count}</span>
