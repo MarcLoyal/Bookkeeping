@@ -42,10 +42,15 @@ export async function getClientLastActivity(userId: string, asOf?: Date): Promis
  * "Clients Needing Attention" dashboard stat: how many currently-active
  * clients are NOT in "active" activity health (i.e. quiet, dormant, or
  * never) — same threshold `activityHealthFor` already uses for each
- * client's individual badge, just counted. Self-contained (fetches its own
- * active-client-id list rather than taking one as a param) so it can run
- * in parallel with the rest of the dashboard's queries, same pattern as
- * this file's other dashboard-stat functions.
+ * client's individual badge, just counted.
+ *
+ * Takes `activeClientIds` and `lastActivityNow` as params rather than
+ * fetching them itself — the dashboard page already has both (from
+ * `getFirmDashboardStats`'s client rows and its own
+ * `getClientLastActivity(userId)` call for the activity badges), so
+ * re-fetching here would just be a second identical round trip for data
+ * the caller already has. Only issues the one genuinely new query: last
+ * activity as of 7 days ago.
  *
  * The `previous` side evaluates the same fixed set of today's active
  * clients against their activity health 7 days ago (same clients, same
@@ -56,17 +61,16 @@ export async function getClientLastActivity(userId: string, asOf?: Date): Promis
  * which is simply true (no work had been logged for them yet) rather than
  * a distortion.
  */
-export async function getClientAttentionStat(userId: string): Promise<PeriodStat> {
+export async function getClientAttentionStat(
+  userId: string,
+  activeClientIds: string[],
+  lastActivityNow: Map<string, Date>
+): Promise<PeriodStat> {
   const now = new Date();
   const weekAgo = new Date(now);
   weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
 
-  const [activeClientRows, lastActivityNow, lastActivityWeekAgo] = await Promise.all([
-    withUserContext(userId, (tx) => tx.select({ id: clients.id }).from(clients).where(eq(clients.status, "active"))),
-    getClientLastActivity(userId),
-    getClientLastActivity(userId, weekAgo),
-  ]);
-  const activeClientIds = activeClientRows.map((c) => c.id);
+  const lastActivityWeekAgo = await getClientLastActivity(userId, weekAgo);
 
   const countNeedingAttention = (lastActivity: Map<string, Date>, asOf: Date) =>
     activeClientIds.filter((id) => activityHealthFor(lastActivity.get(id) ?? null, asOf) !== "active").length;

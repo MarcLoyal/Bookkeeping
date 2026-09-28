@@ -111,15 +111,19 @@ export default async function DashboardPage() {
     );
   }
 
-  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines, clientAttention] = await Promise.all([
+  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
     getFirmDashboardStats(user.id),
     user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
     getClientLastActivity(user.id),
     listFirmDrafts(user.id),
     listUpcomingDeadlines(user.id),
-    getClientAttentionStat(user.id),
   ]);
   const needsAttention = drafts.slice(0, 6);
+  const activeClientIds = clients.filter((c) => c.status === "active").map((c) => c.id);
+  // Depends on `clients` and `clientLastActivity` above (reuses them rather
+  // than re-fetching), so it can't join the initial Promise.all — only the
+  // one genuinely new query (last activity 7 days ago) runs here.
+  const clientAttention = await getClientAttentionStat(user.id, activeClientIds, clientLastActivity);
 
   const now = new Date();
   const weekAgo = new Date(now);
@@ -162,8 +166,9 @@ export default async function DashboardPage() {
           icon={AlertTriangle}
           accent={ACCENT_ORANGE}
           deltaCaption="vs last week"
+          goodDirection="down"
         />
-        <StatCard label="Unposted Drafts" stat={draftCount} icon={FileEdit} accent={ACCENT_AQUA} href="/drafts" />
+        <StatCard label="Unposted Drafts" stat={draftCount} icon={FileEdit} accent={ACCENT_AQUA} href="/drafts" warnWhenPositive />
         <StatCard label="Upcoming Deadlines" stat={upcomingDeadlineCount} icon={CalendarClock} accent={ACCENT_YELLOW} caption="Next 30 days" />
       </div>
 

@@ -1841,6 +1841,52 @@ no +Add Client, no Recent Activity) — confirmed both render correctly
 and the role-based nav/section filtering works as intended. Scratch
 render/screenshot scripts were not committed.
 
+**Self-review pass caught and fixed three real bugs before this PR went
+up for review** (ran `/code-review` against the diff after opening it):
+
+1. **Delta color was inverted for "Clients Needing Attention."**
+   `formatDelta()` always colored an increase green — correct for
+   Total Firms/Total Clients (more is good) but backwards for this
+   metric, where more clients needing attention is bad news. A firm
+   going from 2 to 6 attention-needing clients would have shown "▲
+   +200%" in the same green used for genuinely good growth. Fixed by
+   adding a `goodDirection?: "up" | "down"` prop to `StatCard`
+   (default `"up"`, so every existing platform-admin call site is
+   unaffected) — the ▲/▼ symbol still reflects the actual direction of
+   change, only the color now reflects whether that direction is good
+   for this specific metric. Verified with a rendered before/after
+   check: 2→6 now shows red, 6→2 shows green, and the 0→3 "New" case
+   (no prior-week baseline) correctly shows red rather than the
+   default green a bare "New" badge would imply.
+2. **Dropped the Unposted Drafts card's amber warning state.** The
+   pre-restyle card turned amber (border/background/text) the moment
+   `draftCount > 0` — a real at-a-glance urgency cue lost when it
+   became a plain `StatCard` with a fixed teal icon badge and no
+   conditional styling. Restored via a `warnWhenPositive?: boolean`
+   prop: when true and the current value is > 0, the whole card
+   switches to the amber treatment (same colors as before), otherwise
+   unaffected. Every other `StatCard` usage passes neither prop and is
+   unchanged.
+3. **`getClientAttentionStat` was silently doubling a query the page
+   already ran.** It called `getClientLastActivity(userId)` (no
+   `asOf`) for its "current" side — the exact same call
+   `app/(app)/dashboard/page.tsx` already makes directly for the
+   client table's activity badges. Every dashboard load was issuing
+   two identical `MAX(created_at) GROUP BY client_id` queries in
+   separate transactions instead of one. Fixed by having the function
+   take `activeClientIds` and `lastActivityNow` as params (both
+   already available at the call site — the former derivable from
+   `getFirmDashboardStats`'s client rows, the latter the page's
+   existing `getClientLastActivity(user.id)` call) instead of
+   re-fetching them; it now only issues the one genuinely new query
+   (last activity as of 7 days ago). This moves it out of the initial
+   `Promise.all` (it now depends on that batch's results) but nets out
+   ahead: one added sequential step in exchange for removing two fully
+   redundant round trips.
+
+Re-verified after the fixes: `tsc --noEmit`, `pnpm test` (138 tests),
+`pnpm build` all clean.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
