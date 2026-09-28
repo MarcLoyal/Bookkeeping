@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, CalendarPlus, UserPlus, Users } from "lucide-react";
+import { AlertTriangle, Building2, CalendarClock, CalendarPlus, FileEdit, UserPlus, Users } from "lucide-react";
 import { requireCurrentUser } from "@/lib/auth/current-user";
-import { getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
+import { getClientAttentionStat, getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
 import { listUpcomingDeadlines } from "@/lib/data/deadlines";
 import {
@@ -16,7 +16,7 @@ import { QuickPostPicker } from "./quick-post-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
 import { OverviewSparklineCard } from "./overview-sparkline-card";
-import { StatCard } from "./stat-card";
+import { StatCard, type PeriodStat } from "./stat-card";
 import { DeadlinesWidget } from "./deadlines-widget";
 
 // Dataviz skill's categorical palette (references/palette.md), fixed slot
@@ -118,8 +118,28 @@ export default async function DashboardPage() {
     listFirmDrafts(user.id),
     listUpcomingDeadlines(user.id),
   ]);
-  const active = clients.filter((c) => c.status === "active").length;
   const needsAttention = drafts.slice(0, 6);
+  const activeClientIds = clients.filter((c) => c.status === "active").map((c) => c.id);
+  // Depends on `clients` and `clientLastActivity` above (reuses them rather
+  // than re-fetching), so it can't join the initial Promise.all — only the
+  // one genuinely new query (last activity 7 days ago) runs here.
+  const clientAttention = await getClientAttentionStat(user.id, activeClientIds, clientLastActivity);
+
+  const now = new Date();
+  const weekAgo = new Date(now);
+  weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
+  const totalClients: PeriodStat = {
+    current: clients.length,
+    previous: clients.filter((c) => new Date(c.createdAt) <= weekAgo).length,
+  };
+
+  // "Due in the next 30 days" — includes anything already overdue too
+  // (an overdue due date is trivially <= today+30), which is the right
+  // read for a card that's meant to flag what needs action soon.
+  const in30Days = new Date(now);
+  in30Days.setUTCDate(in30Days.getUTCDate() + 30);
+  const in30DaysIso = in30Days.toISOString().slice(0, 10);
+  const upcomingDeadlineCount = upcomingDeadlines.filter((d) => d.dueDateIso <= in30DaysIso).length;
 
   return (
     <div className="space-y-6">
@@ -138,29 +158,21 @@ export default async function DashboardPage() {
         )}
       </div>
 
-      <DeadlinesWidget deadlines={upcomingDeadlines} />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Link href="/clients?status=active" className="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Active Clients</div>
-          <div className="mt-1 text-2xl font-bold">{active}</div>
-        </Link>
-        <Link href="/clients" className="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Total Clients</div>
-          <div className="mt-1 text-2xl font-bold">{clients.length}</div>
-        </Link>
-        <Link
-          href="/drafts"
-          className={`rounded-lg border p-4 transition hover:shadow-sm ${
-            draftCount > 0 ? "border-amber-300 bg-amber-50 hover:border-amber-400" : "border-slate-200 bg-white hover:border-slate-300"
-          }`}
-        >
-          <div className={`text-xs font-medium uppercase tracking-wide ${draftCount > 0 ? "text-amber-700" : "text-slate-600"}`}>
-            Unposted Drafts
-          </div>
-          <div className={`mt-1 text-2xl font-bold ${draftCount > 0 ? "text-amber-900" : ""}`}>{draftCount}</div>
-        </Link>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total Clients" stat={totalClients} icon={Building2} accent={ACCENT_BLUE} deltaCaption="vs last week" />
+        <StatCard
+          label="Clients Needing Attention"
+          stat={clientAttention}
+          icon={AlertTriangle}
+          accent={ACCENT_ORANGE}
+          deltaCaption="vs last week"
+          goodDirection="down"
+        />
+        <StatCard label="Unposted Drafts" stat={draftCount} icon={FileEdit} accent={ACCENT_AQUA} href="/drafts" warnWhenPositive />
+        <StatCard label="Upcoming Deadlines" stat={upcomingDeadlineCount} icon={CalendarClock} accent={ACCENT_YELLOW} caption="Next 30 days" />
       </div>
+
+      <DeadlinesWidget deadlines={upcomingDeadlines} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">

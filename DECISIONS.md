@@ -1755,6 +1755,138 @@ then screenshotted — confirmed sidebar/topbar, all four stat cards
 render as intended. Scratch render/screenshot scripts were deleted
 afterward, not committed.
 
+## Firm/bookkeeper dashboard restyle: same shared pieces as the platform admin one
+
+Extends the previous restyle (PR #26) to `/dashboard` for `firm_admin`/
+`bookkeeper`/`reviewer` — reusing the same components rather than
+building parallel ones, per explicit instruction. `platform_admin` is
+untouched; `client_user` (never had sidebar-worthy nav — its one real
+page is reached by an immediate redirect, not by using this nav) keeps
+the original top-nav shell.
+
+**Confirmed before building, per the two explicit questions:**
+1. BIR due-date math already matches the agreed table exactly —
+   2550Q/2551Q at quarter-end+25 days, 1601-EQ at the last day of the
+   following month, 1701Q fixed at May 15/Aug 15/Nov 15, 1701A at April
+   15 — all in `lib/tax/bir-deadlines.ts` from PR #25, covered by its
+   existing 21 tests. Nothing changed here.
+2. **No new migration.** Every new stat derives from `clients` and
+   `journal_entries`, both already fully RLS-granted to a firm's own
+   staff for their own firm — no schema or RLS change, just two new
+   lightweight query functions in `lib/data/dashboard.ts` (same "no
+   migration needed, just a new query" latitude PR #26 established).
+
+**Shared, not duplicated**: `SidebarShell` (`app/(app)/layout.tsx`) is
+now one component instantiated for both `platform_admin` and every
+staff role, with only the nav item list swapped (`PLATFORM_ADMIN_NAV` vs.
+`staffNav(role)` — Tax Rules/Audit Log stay `firm_admin`-only, same as
+the pre-restyle top-nav). `StatCard` (`app/(app)/dashboard/stat-card.tsx`)
+gained three additive, backward-compatible capabilities instead of a
+second component: `stat` now accepts a plain `number` (no delta) as well
+as a `PeriodStat`; an optional `caption` for a static line in place of a
+delta ("Next 30 days"); an optional `href` that wraps the card in a
+`Link`, restoring the pre-restyle firm dashboard's clickable-card
+affordance for Total Clients / Unposted Drafts. Every existing
+`platform_admin` call site is unaffected (still passes a `PeriodStat` +
+`deltaCaption`, same as before).
+
+**The 4 stat cards, and why each delta is/isn't there:**
+- **Total Clients** — real delta vs. 7 days ago, computed in JS from
+  `clients.createdAt` (already fetched by `getFirmDashboardStats`, no
+  new query).
+- **Clients Needing Attention** — currently-active clients not in
+  "active" activity health (same Active/Quiet/Dormant threshold as each
+  client's own badge). New `getClientAttentionStat()`: the `previous`
+  side evaluates the *same* set of today's active clients against their
+  activity health 7 days ago, via `getClientLastActivity(userId, asOf)`
+  — `getClientLastActivity` gained an optional `asOf` param (`WHERE
+  created_at <= asOf`, additive, existing call sites unaffected) rather
+  than a new function. Verified live against the real seeded DB that
+  `.where(asOf ? lte(...) : undefined)` correctly omits the clause when
+  `asOf` is absent (drizzle-orm supports this directly).
+- **Unposted Drafts** — no delta. A draft that got posted since is
+  invisible to a `status = 'draft'` query regardless of any date filter,
+  so "drafts 7 days ago" isn't reconstructable from current data, only
+  approximable in a way that could read as confidently wrong rather than
+  approximate. Card just shows the number, clickable through to
+  `/drafts` (restoring the old card's link).
+- **Upcoming Deadlines** — no delta either; it's a forward-looking
+  calendar count derived fresh from today's date and the current active
+  client roster, not an event count, so "vs last period" has no natural
+  meaning. Shows "Next 30 days" as a static caption instead. Count =
+  `listUpcomingDeadlines()` results with `dueDateIso <= today+30`
+  (deliberately includes already-overdue items too — an overdue due
+  date is trivially within that window, and the card's job is to flag
+  what needs action soon, overdue included).
+
+**Below the stat row**: reordered to stats → deadlines → the two-column
+client-list/needs-attention layout (previously deadlines sat above the
+stats). The three widgets there — `DeadlinesWidget`, the Recent Clients
+table, the Needs Attention list (and firm_admin's Recent Activity feed)
+— needed no visual changes at all: they already used the same
+`rounded-lg border border-slate-200 bg-white` card language and
+`text-sm font-semibold text-slate-900` section-header convention PR #26
+established for "Firms & Bookkeepers" — just repositioned, functionally
+untouched.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (138 tests, all passing
+against the real local Postgres, no test changes needed), `pnpm build`
+all clean. Same visual-verification approach as PR #26 (no live
+Supabase in this sandbox): rendered the real `StatCard`/`DeadlinesWidget`/
+`ActivityBadge` components standalone via `react-dom/server` against
+representative data and the project's own compiled CSS, screenshotted
+both a `firm_admin` view (full nav, +Add Client button, all 4 stat
+cards, Recent Activity section) and a `bookkeeper` view (trimmed nav,
+no +Add Client, no Recent Activity) — confirmed both render correctly
+and the role-based nav/section filtering works as intended. Scratch
+render/screenshot scripts were not committed.
+
+**Self-review pass caught and fixed three real bugs before this PR went
+up for review** (ran `/code-review` against the diff after opening it):
+
+1. **Delta color was inverted for "Clients Needing Attention."**
+   `formatDelta()` always colored an increase green — correct for
+   Total Firms/Total Clients (more is good) but backwards for this
+   metric, where more clients needing attention is bad news. A firm
+   going from 2 to 6 attention-needing clients would have shown "▲
+   +200%" in the same green used for genuinely good growth. Fixed by
+   adding a `goodDirection?: "up" | "down"` prop to `StatCard`
+   (default `"up"`, so every existing platform-admin call site is
+   unaffected) — the ▲/▼ symbol still reflects the actual direction of
+   change, only the color now reflects whether that direction is good
+   for this specific metric. Verified with a rendered before/after
+   check: 2→6 now shows red, 6→2 shows green, and the 0→3 "New" case
+   (no prior-week baseline) correctly shows red rather than the
+   default green a bare "New" badge would imply.
+2. **Dropped the Unposted Drafts card's amber warning state.** The
+   pre-restyle card turned amber (border/background/text) the moment
+   `draftCount > 0` — a real at-a-glance urgency cue lost when it
+   became a plain `StatCard` with a fixed teal icon badge and no
+   conditional styling. Restored via a `warnWhenPositive?: boolean`
+   prop: when true and the current value is > 0, the whole card
+   switches to the amber treatment (same colors as before), otherwise
+   unaffected. Every other `StatCard` usage passes neither prop and is
+   unchanged.
+3. **`getClientAttentionStat` was silently doubling a query the page
+   already ran.** It called `getClientLastActivity(userId)` (no
+   `asOf`) for its "current" side — the exact same call
+   `app/(app)/dashboard/page.tsx` already makes directly for the
+   client table's activity badges. Every dashboard load was issuing
+   two identical `MAX(created_at) GROUP BY client_id` queries in
+   separate transactions instead of one. Fixed by having the function
+   take `activeClientIds` and `lastActivityNow` as params (both
+   already available at the call site — the former derivable from
+   `getFirmDashboardStats`'s client rows, the latter the page's
+   existing `getClientLastActivity(user.id)` call) instead of
+   re-fetching them; it now only issues the one genuinely new query
+   (last activity as of 7 days ago). This moves it out of the initial
+   `Promise.all` (it now depends on that batch's results) but nets out
+   ahead: one added sequential step in exchange for removing two fully
+   redundant round trips.
+
+Re-verified after the fixes: `tsc --noEmit`, `pnpm test` (138 tests),
+`pnpm build` all clean.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
