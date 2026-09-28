@@ -1,15 +1,30 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Building2, CalendarPlus, UserPlus, Users } from "lucide-react";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
 import { listUpcomingDeadlines } from "@/lib/data/deadlines";
-import { getFirmSignupsByWeek, getPlatformStats, listFirmsForDashboard } from "@/lib/data/platform-dashboard";
+import {
+  getCumulativeFirmsByWeek,
+  getFirmSignupsByWeek,
+  getPlatformStats,
+  listFirmsForDashboard,
+} from "@/lib/data/platform-dashboard";
 import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
+import { OverviewSparklineCard } from "./overview-sparkline-card";
+import { StatCard } from "./stat-card";
 import { DeadlinesWidget } from "./deadlines-widget";
+
+// Dataviz skill's categorical palette (references/palette.md), fixed slot
+// order 1-4 — one accent per stat card, not a magnitude ramp.
+const ACCENT_BLUE = "#2a78d6";
+const ACCENT_ORANGE = "#eb6834";
+const ACCENT_AQUA = "#1baf7a";
+const ACCENT_YELLOW = "#eda100";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
@@ -24,10 +39,11 @@ export default async function DashboardPage() {
   // would just return empty for them, so this is a genuinely separate view
   // rather than reusing the firm dashboard's queries.
   if (user.role === "platform_admin") {
-    const [stats, firmRows, weeklySignups] = await Promise.all([
+    const [stats, firmRows, weeklySignups, cumulativeFirms] = await Promise.all([
       getPlatformStats(user.id),
       listFirmsForDashboard(user.id),
       getFirmSignupsByWeek(user.id, 10),
+      getCumulativeFirmsByWeek(user.id, 10),
     ]);
 
     return (
@@ -39,24 +55,40 @@ export default async function DashboardPage() {
           </Link>
         </div>
 
-        <PlatformGrowthChart data={weeklySignups} />
-
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Total Firms</div>
-            <div className="mt-1 text-2xl font-bold">{stats.totalFirms}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">Active Users (all firms)</div>
-            <div className="mt-1 text-2xl font-bold">{stats.totalActiveUsers}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">New Firms This Week</div>
-            <div className="mt-1 text-2xl font-bold">{stats.newFirmsThisWeek}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-600">New Firms This Month</div>
-            <div className="mt-1 text-2xl font-bold">{stats.newFirmsThisMonth}</div>
+          <StatCard label="Total Firms" stat={stats.totalFirms} icon={Building2} accent={ACCENT_BLUE} deltaCaption="vs last week" />
+          <StatCard
+            label="Active Users (All Firms)"
+            stat={stats.totalActiveUsers}
+            icon={Users}
+            accent={ACCENT_ORANGE}
+            deltaCaption="vs last week (approx.)"
+          />
+          <StatCard
+            label="New Firms This Week"
+            stat={stats.newFirmsThisWeek}
+            icon={UserPlus}
+            accent={ACCENT_AQUA}
+            deltaCaption="vs last week"
+          />
+          <StatCard
+            label="New Firms This Month"
+            stat={stats.newFirmsThisMonth}
+            icon={CalendarPlus}
+            accent={ACCENT_YELLOW}
+            deltaCaption="vs last month"
+          />
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-slate-900">Overview</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <PlatformGrowthChart data={weeklySignups} />
+            <OverviewSparklineCard
+              label="Total Firms (cumulative)"
+              data={cumulativeFirms.map((d) => ({ weekStart: d.weekStart, value: d.total }))}
+              accent={ACCENT_BLUE}
+            />
           </div>
         </div>
 

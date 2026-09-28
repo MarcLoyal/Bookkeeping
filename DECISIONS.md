@@ -1670,6 +1670,91 @@ as the most overdue item relative to today).
 `pnpm build` all pass — no new routes, lives inside the existing
 `/dashboard` page.
 
+## Platform admin dashboard restyle: stat tiles, sidebar shell, Overview trends
+
+Purely a visual pass over `/dashboard` for `platform_admin` — no new
+routes, no change to what data a platform admin can see (same RLS
+grants from 007, plus one small precedented extension below), no change
+to the Firms & Bookkeepers table's behavior.
+
+**Sidebar + topbar shell, scoped to `platform_admin` only.** `app/(app)/
+layout.tsx` now branches on `user.role === "platform_admin"` before
+rendering: platform admins get a dedicated left-sidebar (logo, Dashboard
+/ Platform Admins nav) + topbar ("Welcome, {name} · {role}", sign out)
+shell; every other role keeps the original single top-nav bar
+unchanged. Deliberately kept as a branch inside the existing shared
+layout rather than a new route group — the two platform_admin routes
+already live under `(app)`, and splitting them into their own group
+would touch routing/redirects for a task that's visual only.
+
+**Stat cards** (`stat-card.tsx`): colored circular icon badge, hero
+number (`Intl.NumberFormat` compact — `1,284` stays as-is, `12.9K` past
+four digits), and a real vs-previous-period delta — not a decorative
+placeholder. Icon accent colors are the dataviz skill's categorical
+palette (`references/palette.md`), fixed slots 1–4 (blue/orange/aqua/
+yellow) — one identity color per card, not a magnitude ramp.
+
+**Every delta is a real computed comparison, not a fabricated number**:
+- Total Firms: current vs. count as of 7 days ago.
+- New Firms This Week / This Month: current period vs. the immediately
+  preceding one (same week-start convention `startOfWeek()` already
+  used elsewhere in this file, not the Monday/ISO convention
+  `getFirmSignupsByWeek` uses for its chart buckets — those two
+  conventions already coexist deliberately per that function's own
+  comment).
+- Active Users (All Firms): this one has no exact answer — the app
+  keeps no historical snapshot of account status. `previous` is
+  "currently-active users that already existed 7 days ago"
+  (`platform_active_users_before(cutoff)`, new SECURITY DEFINER SQL
+  function in `008_platform_dashboard_deltas.sql`, same shape as
+  007's `platform_total_active_users()` and needed for the same reason:
+  platform_admin has no row-level SELECT on firm-scoped `users` rows,
+  only the two aggregate functions). This is a disclosed approximation
+  (active rarely flips), not an exact "active users as of that date"
+  figure — said so in both the SQL file's comment and
+  `getPlatformStats`'s.
+- `previous === 0` is handled explicitly (shows "New" instead of a
+  division-by-zero/Infinity percentage).
+
+**Overview section**: two cards, per spec ("2-3 smaller cards... reuse
+the existing weekly growth chart for one of these"). First is the
+existing `PlatformGrowthChart` — its drawing logic is untouched, only
+its container's heading style was adjusted to match the new card
+language (`text-xs uppercase` label instead of `text-sm font-semibold`)
+so it reads as one of the row rather than a mismatched leftover.
+Second is new: `overview-sparkline-card.tsx`, a cumulative-firms trend
+(`getCumulativeFirmsByWeek` — one `COUNT WHERE created_at < cutoff` per
+week, same "simple sequential queries over a small fixed range" pattern
+`listFirmsForDashboard`'s owner-per-firm lookup already uses, for the
+same reason: obviously correct over premature-clever). Sparkline follows
+the dataviz skill's stat-tile trend contract literally: muted-hue line,
+current-period point picked out in the card's own accent, light area
+wash under the line.
+
+**Scope decision, made deliberately**: did not add a third Overview
+card or a weekly "active users" trend. Both would need a new
+table-returning SECURITY DEFINER function (RLS blocks a plain SELECT
+across firm-scoped `users` rows for platform_admin — see 007's own doc
+comment on why that's a deliberate summary-only boundary, not an
+oversight to route around). Extending the same pattern once (the
+Active Users delta) is proportionate for a "restyle" task; doing it
+twice more to manufacture a third card nobody asked for is scope creep
+past what a visual pass should touch.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (138 tests, all passing
+against the real local Postgres, no changes needed), `pnpm build` all
+clean. Visual check: real login wasn't reachable in this sandbox
+(`.env.local`'s Supabase vars are unset here — platform-admin sign-in
+is Google-OAuth-only, per `create-platform-admin.ts`'s own doc comment,
+so there's no password-based path in either case), so the actual
+`StatCard`/`OverviewSparklineCard`/`PlatformGrowthChart`/layout
+components were rendered standalone with `react-dom/server` against
+representative data and the project's own compiled Tailwind output,
+then screenshotted — confirmed sidebar/topbar, all four stat cards
+(including the `previous === 0` → "New" case), and both Overview cards
+render as intended. Scratch render/screenshot scripts were deleted
+afterward, not committed.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
