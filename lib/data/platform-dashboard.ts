@@ -2,8 +2,7 @@ import "server-only";
 import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { firms, users } from "@/db/schema";
-
-export type PeriodStat = { current: number; previous: number };
+import type { PeriodStat } from "@/app/(app)/dashboard/stat-card";
 
 export type PlatformStats = {
   totalFirms: PeriodStat;

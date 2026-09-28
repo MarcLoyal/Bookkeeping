@@ -1,6 +1,8 @@
 import Link from "next/link";
-import { LayoutDashboard, ShieldCheck } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { History, LayoutDashboard, Percent, ShieldCheck, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import type { Role } from "@/lib/auth/current-user";
 import { logoutAction } from "./logout-action";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -11,10 +13,24 @@ const ROLE_LABELS: Record<string, string> = {
   platform_admin: "Platform Admin",
 };
 
-const PLATFORM_ADMIN_NAV = [
+type NavItem = { href: string; label: string; icon: LucideIcon };
+
+const PLATFORM_ADMIN_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/settings/platform-admins", label: "Platform Admins", icon: ShieldCheck },
 ];
+
+/** firm_admin/bookkeeper/reviewer nav — same set every staff role already had access to on the old top-nav, just Tax Rules/Audit Log staying firm_admin-only. */
+function staffNav(role: Role): NavItem[] {
+  const items: NavItem[] = [
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/clients", label: "Clients", icon: Users },
+  ];
+  if (role === "firm_admin") {
+    items.push({ href: "/settings/tax-rules", label: "Tax Rules", icon: Percent }, { href: "/settings/audit-log", label: "Audit Log", icon: History });
+  }
+  return items;
+}
 
 function SignOutButton() {
   return (
@@ -23,6 +39,54 @@ function SignOutButton() {
         Sign out
       </button>
     </form>
+  );
+}
+
+/** Shared by platform_admin and firm-staff roles — only the nav item list differs. client_user keeps the original top-nav below (it never had sidebar-worthy nav to begin with). */
+function SidebarShell({
+  user,
+  navItems,
+  children,
+}: {
+  user: { name: string; role: Role };
+  navItems: NavItem[];
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-h-screen">
+      <aside className="no-print flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">
+        <div className="border-b border-slate-100 px-4 py-4">
+          <Link href="/dashboard" prefetch={false} className="text-lg font-bold tracking-tight">
+            Keep.Books
+          </Link>
+        </div>
+        <nav className="flex-1 space-y-0.5 px-2 py-3">
+          {navItems.map(({ href, label, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              prefetch={false}
+              className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            >
+              <Icon className="h-4 w-4" aria-hidden="true" />
+              {label}
+            </Link>
+          ))}
+        </nav>
+      </aside>
+      <div className="flex flex-1 flex-col">
+        <header className="no-print border-b border-slate-200 bg-white">
+          <div className="flex items-center justify-between px-6 py-3">
+            <span className="text-sm text-slate-500">
+              Welcome, <span className="font-medium text-slate-700">{user.name}</span> ·{" "}
+              <span className="font-medium text-slate-700">{ROLE_LABELS[user.role]}</span>
+            </span>
+            <SignOutButton />
+          </div>
+        </header>
+        <main className="flex-1 px-6 py-6">{children}</main>
+      </div>
+    </div>
   );
 }
 
@@ -36,50 +100,24 @@ function SignOutButton() {
  * authenticated mutation to /login. Falling back to a degraded (but present)
  * shell instead of throwing keeps that pass harmless.
  */
+const SIDEBAR_ROLES = new Set<Role>(["platform_admin", "firm_admin", "bookkeeper", "reviewer"]);
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
 
-  // Platform admins get their own sidebar+topbar shell — this is a
-  // dedicated app-within-the-app for the two platform_admin-only routes
-  // (/dashboard, /settings/platform-admins), kept separate from the
-  // firm-facing top-nav below rather than merged into one nav that has to
-  // branch on every link.
-  if (user?.role === "platform_admin") {
+  // platform_admin and every firm-staff role get the same sidebar+topbar
+  // shell, just with a different nav item list — one shared component
+  // (SidebarShell above) rather than near-duplicate JSX per role.
+  // client_user keeps the original top-nav below: it never had
+  // sidebar-worthy nav (no Clients/Tax Rules/Audit Log access), and its
+  // one real page (/clients/[id]) is reached via an immediate redirect
+  // from /dashboard, not by using this nav at all.
+  if (user && SIDEBAR_ROLES.has(user.role)) {
+    const navItems = user.role === "platform_admin" ? PLATFORM_ADMIN_NAV : staffNav(user.role);
     return (
-      <div className="flex min-h-screen">
-        <aside className="no-print flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="border-b border-slate-100 px-4 py-4">
-            <Link href="/dashboard" prefetch={false} className="text-lg font-bold tracking-tight">
-              Keep.Books
-            </Link>
-          </div>
-          <nav className="flex-1 space-y-0.5 px-2 py-3">
-            {PLATFORM_ADMIN_NAV.map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                prefetch={false}
-                className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-                {label}
-              </Link>
-            ))}
-          </nav>
-        </aside>
-        <div className="flex flex-1 flex-col">
-          <header className="no-print border-b border-slate-200 bg-white">
-            <div className="flex items-center justify-between px-6 py-3">
-              <span className="text-sm text-slate-500">
-                Welcome, <span className="font-medium text-slate-700">{user.name}</span> ·{" "}
-                <span className="font-medium text-slate-700">{ROLE_LABELS[user.role]}</span>
-              </span>
-              <SignOutButton />
-            </div>
-          </header>
-          <main className="flex-1 px-6 py-6">{children}</main>
-        </div>
-      </div>
+      <SidebarShell user={user} navItems={navItems}>
+        {children}
+      </SidebarShell>
     );
   }
 
@@ -95,21 +133,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <Link href="/dashboard" prefetch={false} className="hover:text-slate-900">
                 Dashboard
               </Link>
-              {user && user.role !== "client_user" && (
-                <Link href="/clients" prefetch={false} className="hover:text-slate-900">
-                  Clients
-                </Link>
-              )}
-              {user?.role === "firm_admin" && (
-                <Link href="/settings/tax-rules" prefetch={false} className="hover:text-slate-900">
-                  Tax Rules
-                </Link>
-              )}
-              {user?.role === "firm_admin" && (
-                <Link href="/settings/audit-log" prefetch={false} className="hover:text-slate-900">
-                  Audit Log
-                </Link>
-              )}
             </nav>
           </div>
           <div className="flex items-center gap-3 text-sm">

@@ -1,7 +1,9 @@
 import "server-only";
-import { asc, count, eq, sql } from "drizzle-orm";
+import { asc, count, eq, lte, sql } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { clients, journalEntries } from "@/db/schema";
+import { activityHealthFor } from "@/lib/activity-health";
+import type { PeriodStat } from "@/app/(app)/dashboard/stat-card";
 
 export async function getFirmDashboardStats(userId: string) {
   return withUserContext(userId, async (tx) => {
@@ -15,15 +17,64 @@ export async function getFirmDashboardStats(userId: string) {
   });
 }
 
-/** Most recent journal_entries.createdAt per client this user can access — the "how recently was this client worked on" signal behind each client's activity badge. Clients with no entries yet just don't appear in the map. */
-export async function getClientLastActivity(userId: string): Promise<Map<string, Date>> {
+/**
+ * Most recent journal_entries.createdAt per client this user can access —
+ * the "how recently was this client worked on" signal behind each client's
+ * activity badge. Clients with no entries yet just don't appear in the map.
+ *
+ * `asOf`, when given, answers "what would this map have looked like as of
+ * that date" (entries after it excluded) — used by
+ * getClientAttentionStat() below to evaluate activity health at a past
+ * reference point, not just now.
+ */
+export async function getClientLastActivity(userId: string, asOf?: Date): Promise<Map<string, Date>> {
   return withUserContext(userId, async (tx) => {
     const rows = await tx
       .select({ clientId: journalEntries.clientId, lastActivity: sql<Date>`max(${journalEntries.createdAt})` })
       .from(journalEntries)
+      .where(asOf ? lte(journalEntries.createdAt, asOf) : undefined)
       .groupBy(journalEntries.clientId);
     return new Map(rows.map((r) => [r.clientId, r.lastActivity]));
   });
+}
+
+/**
+ * "Clients Needing Attention" dashboard stat: how many currently-active
+ * clients are NOT in "active" activity health (i.e. quiet, dormant, or
+ * never) — same threshold `activityHealthFor` already uses for each
+ * client's individual badge, just counted. Self-contained (fetches its own
+ * active-client-id list rather than taking one as a param) so it can run
+ * in parallel with the rest of the dashboard's queries, same pattern as
+ * this file's other dashboard-stat functions.
+ *
+ * The `previous` side evaluates the same fixed set of today's active
+ * clients against their activity health 7 days ago (same clients, same
+ * thresholds, different reference date and a `lastActivity` map built with
+ * `asOf` 7 days ago) — not a separate query for "which clients were active
+ * 7 days ago," since client status isn't tracked historically. A client
+ * onboarded within the last week reads as "never active" as of 7 days ago,
+ * which is simply true (no work had been logged for them yet) rather than
+ * a distortion.
+ */
+export async function getClientAttentionStat(userId: string): Promise<PeriodStat> {
+  const now = new Date();
+  const weekAgo = new Date(now);
+  weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
+
+  const [activeClientRows, lastActivityNow, lastActivityWeekAgo] = await Promise.all([
+    withUserContext(userId, (tx) => tx.select({ id: clients.id }).from(clients).where(eq(clients.status, "active"))),
+    getClientLastActivity(userId),
+    getClientLastActivity(userId, weekAgo),
+  ]);
+  const activeClientIds = activeClientRows.map((c) => c.id);
+
+  const countNeedingAttention = (lastActivity: Map<string, Date>, asOf: Date) =>
+    activeClientIds.filter((id) => activityHealthFor(lastActivity.get(id) ?? null, asOf) !== "active").length;
+
+  return {
+    current: countNeedingAttention(lastActivityNow, now),
+    previous: countNeedingAttention(lastActivityWeekAgo, weekAgo),
+  };
 }
 
 export type FirmDraftRow = {
