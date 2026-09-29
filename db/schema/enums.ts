@@ -30,7 +30,11 @@ export const userRoleEnum = pgEnum("user_role", [
 // existed) — new members default to 'all' going forward (set in
 // application code at invite-acceptance time, not by this column
 // default, which only covers rows inserted without specifying it, e.g.
-// dev seed scripts).
+// dev seed scripts) — EXCEPT Viewer, which always defaults to
+// 'assigned' even with zero clients picked (see
+// lib/auth/create-team-member.ts): a read-only role has no business
+// defaulting to every client in the firm just because it can't write
+// anything.
 export const accessScopeEnum = pgEnum("access_scope", ["all", "assigned"]);
 
 export const taxpayerTypeEnum = pgEnum("taxpayer_type", [

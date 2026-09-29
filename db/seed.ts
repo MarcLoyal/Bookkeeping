@@ -20,6 +20,7 @@ import {
   purchases,
   salesInvoices,
   taxRules,
+  userClientAssignments,
   users,
   withholdingTaxBrackets,
 } from "./schema";
@@ -109,7 +110,7 @@ async function main() {
     })
     .returning();
   // accessScope: "all" set explicitly even though it's the column default
-  // — makes clear these two see every demo client without needing
+  // — makes clear this one sees every demo client without needing
   // per-client assignment set up separately, since there's nothing else
   // in this seed script that would grant it otherwise.
   const [encoder] = await db
@@ -123,6 +124,13 @@ async function main() {
       accessScope: "all",
     })
     .returning();
+  // accessScope: "assigned", NOT "all" — Viewer always defaults to
+  // 'assigned' (see lib/auth/create-team-member.ts and
+  // db/schema/enums.ts's accessScopeEnum comment): a read-only role has
+  // no business defaulting to every client in the firm. Explicit
+  // user_client_assignments rows for both demo clients are inserted
+  // below, once they exist, so this demo account still has something to
+  // actually view.
   const [viewer] = await db
     .insert(users)
     .values({
@@ -131,7 +139,7 @@ async function main() {
       email: "viewer@keepbooks.demo",
       name: "Vic Viewer",
       role: "viewer",
-      accessScope: "all",
+      accessScope: "assigned",
     })
     .returning();
 
@@ -188,6 +196,13 @@ async function main() {
     { clientId: tradingCorp.id, formCode: "1601-EQ", filingFrequency: "quarterly" },
     { clientId: servicesSoleProp.id, formCode: "2551Q", filingFrequency: "quarterly" },
     { clientId: servicesSoleProp.id, formCode: "1701Q", filingFrequency: "quarterly" },
+  ]);
+
+  // Viewer is accessScope: "assigned" (see above) — grant it both demo
+  // clients explicitly so the demo account has something to view.
+  await db.insert(userClientAssignments).values([
+    { userId: viewer.id, clientId: tradingCorp.id },
+    { userId: viewer.id, clientId: servicesSoleProp.id },
   ]);
 
   console.log("Seeding chart of accounts for both clients...");

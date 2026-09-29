@@ -2221,7 +2221,57 @@ FK-violating state, so there's no separate re-keying step needed
 afterward; running `pnpm migrate-demo-users` after this script is now
 a harmless no-op for `viewer@keepbooks.demo`, not a required step.
 
-## Known non-blocking follow-ups
+### Follow-up: Viewer's demo/default access_scope was 'all' — not intentional
+
+Asked directly: no, this wasn't a deliberate security decision. The
+demo seed's `accessScope: "all"` for both Encoder and Viewer was
+purely a demo-data convenience — "makes clear these two see every demo
+client without needing per-client assignment set up separately" (the
+seed script's own comment) — not a considered default for the Viewer
+*role*. On reflection it's the wrong default for a read-only role
+specifically: Viewer can't write anything, so there's no
+least-privilege reason for it to default to seeing every client in
+the firm the moment someone's added. (Encoder is left as `"all"` here
+— not asked about, and Encoder's own write scope is a separate
+question the user hasn't raised.)
+
+Changed:
+- `lib/auth/create-team-member.ts`: a new Viewer's `access_scope` is
+  now always `'assigned'`, even with zero clients picked (sees nothing
+  until an Owner assigns some) — previously it followed the same
+  "assigned if clients picked, else all" rule as every other role.
+  Every other role's default is unchanged.
+- `db/schema/enums.ts`'s `accessScopeEnum` comment updated to note the
+  Viewer exception to the general "new members default to 'all'" rule.
+- `db/seed.ts`: `viewer@keepbooks.demo` now seeded `accessScope:
+  "assigned"` with explicit `user_client_assignments` rows for both
+  demo clients (so the demo account still has something to view,
+  rather than being seeded into a state where it sees nothing and
+  looks broken).
+- `scripts/seed-viewer-demo-user.ts`: rewritten from a one-shot
+  insert-if-missing script into an idempotent convergence script — it
+  now also corrects an already-existing row's `access_scope` to
+  `'assigned'` and backfills the missing client assignments, since the
+  user's real Supabase project already has this row seeded with the
+  old `"all"` default from before this change. **Re-run
+  `pnpm seed-viewer-demo-user`** to apply the fix there; no other step
+  needed.
+
+Not changed: an Owner creating a Viewer can still effectively grant
+firm-wide visibility by checking every client in the picker — the
+difference is that ends up as `'assigned'` with every client listed
+explicitly, not the `'all'` flag, which is arguably more audit-friendly
+anyway (every grant is an explicit row, not an implicit flag).
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` still 176/176 (this
+change doesn't touch RLS, only application-layer defaults and seed
+data, so no new RLS test was needed), `pnpm build` clean. Did not run
+`db/seed.ts` end-to-end against a fresh firm in this environment (the
+local sandbox already has a seeded demo firm, and renaming it to force
+a fresh run was blocked as a shared-resource mutation) — reviewed the
+diff by hand instead: the new insert follows the exact same
+`.returning()`-then-reference pattern already used for every other
+seed insert in this file, ordered after both demo clients exist.
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
   logs a deprecation warning. Not yet migrated — functionally identical for

@@ -37,9 +37,11 @@ export type CreateTeamMemberResult = { ok: true } | { ok: false; error: string }
  * A Bookkeeper's new Encoder is always access_scope 'assigned' with at
  * least one client required: defaulting it to 'all' would hand the new
  * Encoder broader access than the Bookkeeper who created it has any
- * business granting. An Owner's invite defaults to 'all' unless specific
- * clients are picked, matching accessScopeEnum's documented general
- * intent (db/schema/enums.ts).
+ * business granting. A new Viewer is also always 'assigned' (even with
+ * zero clients picked) — a read-only role has no business defaulting to
+ * every client in the firm. Every other Owner-created role defaults to
+ * 'all' unless specific clients are picked, matching accessScopeEnum's
+ * documented general intent (db/schema/enums.ts).
  *
  * Uses supabase.auth.admin.inviteUserByEmail() — sends Supabase's own
  * invite email, landing at app/auth/confirm/route.ts exactly like a
@@ -93,7 +95,12 @@ export async function createTeamMember(currentUser: CurrentUser, input: unknown)
     }
   }
 
-  const accessScope = clientIds.length > 0 ? "assigned" : "all";
+  // Viewer always defaults to 'assigned', even with zero clients picked
+  // (sees nothing until an Owner assigns some) — a read-only role
+  // shouldn't default to seeing every client in the firm just because it
+  // can't write anything. Every other role keeps the general default:
+  // 'assigned' once specific clients are picked, 'all' otherwise.
+  const accessScope = role === "viewer" || clientIds.length > 0 ? "assigned" : "all";
 
   const supabase = createSupabaseAdminClient();
   let authUserId: string;
