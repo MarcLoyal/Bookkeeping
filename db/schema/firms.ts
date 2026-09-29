@@ -56,3 +56,26 @@ export const userClientAssignments = pgTable(
     index("user_client_assignments_client_id_idx").on(t.clientId),
   ]
 );
+
+// One row per (user, client) ever visited, upserted on every page load
+// under /clients/[id] (see app/(app)/clients/[id]/layout.tsx) — the
+// "recently viewed or worked on" signal behind the sidebar's Recent
+// Clients section, for every role, not just whichever roles happen to
+// author journal entries.
+export const userClientViews = pgTable(
+  "user_client_views",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references((): any => clients.id, { onDelete: "cascade" }),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("user_client_views_user_client_idx").on(t.userId, t.clientId),
+    index("user_client_views_client_id_idx").on(t.clientId),
+  ]
+);

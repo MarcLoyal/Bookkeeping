@@ -3142,3 +3142,97 @@ across `team-roles-rls.test.ts`'s new/extended describe blocks). UI
 not manually driven in a browser in this environment — same
 no-live-Supabase-project limitation as every prior PR in this
 session.
+
+## Follow-up: Recent Clients for every role, based on actual views — not just authored entries
+
+Requested before testing this PR: the "Recent clients" section built
+above only worked for Encoder, and only reflected entries that
+Encoder *personally created* (`getRecentClientsForEncoder`, filtered
+to `journal_entries.created_by`). Two problems with that as a
+general-purpose feature: it's Encoder-only, and authorship is the
+wrong signal even for Encoder — a Reviewer or Viewer never creates a
+journal entry at all, so an authorship-based query would leave them
+with an permanently-empty section no matter how much they actually
+use the app.
+
+**Real view tracking, not an activity proxy.** `journal_entries` has
+no signal for "a Viewer opened this client's reports" — reading
+doesn't write anything. So this needed an actual table:
+`user_client_views` (new — `db/schema/firms.ts`, alongside
+`user_client_assignments`, same per-user-per-client shape), one row
+per `(user_id, client_id)` ever visited, upserted with a fresh
+`last_viewed_at` on every view. Table creation is drizzle-kit's own
+generated migration (`db/migrations/0008_dapper_gideon.sql`, via
+`pnpm db:generate` — this app's established two-phase pattern: table
+DDL from drizzle-kit, RLS/policies hand-authored separately); RLS is
+`db/sql/015_user_client_views_rls.sql`.
+
+**RLS is deliberately the simplest policy in this app so far** — one
+`FOR ALL` policy, `USING (user_id = app_current_user_id())`, since
+this table has no legitimate cross-user read case at all (unlike
+almost everything else here, which is scoped by firm/client access
+but still meant for multiple roles to see the same rows). `WITH
+CHECK` additionally requires `client_id IN
+(SELECT app_accessible_client_ids())` — belt-and-suspenders, since
+`recordClientView()` only ever runs after `getClient()` already
+confirmed access, but it costs nothing to also enforce it at the row
+level rather than trusting the caller. No explicit `GRANT`: new
+tables already inherit `keepbooks_app`'s privileges from 001's
+`ALTER DEFAULT PRIVILEGES`, same as `002_password_reset.sql`'s table
+needed none.
+
+**Where the write happens**: `app/(app)/clients/[id]/layout.tsx` —
+already the one place every page under a client passes through
+(Accounts, Contacts, Transactions, Reports, the draft-entry form,
+all of it), and already calls `getClient()` to confirm access before
+rendering anything. `recordClientView(user.id, id)` runs right after
+that resolves, for every role that reaches this layout (no role
+branching — client_user recording their own one client is harmless,
+just unused), wrapped in try/catch and never awaited into blocking
+the actual page: this is sidebar metadata, not something any page's
+correctness depends on, matching this same layout's own established
+"never let a secondary concern break the primary render" posture
+(see its doc comment on why it avoids `redirect()`/`notFound()`
+already).
+
+**`lib/data/clients.ts`**: `recordClientView()` (the upsert above)
+and `getRecentClientsForUser()` — replaces `getRecentClientsForEncoder`
+entirely (deleted from `lib/data/dashboard.ts`), ordered by
+`user_client_views.last_viewed_at` descending, `INNER JOIN`ed against
+`clients`. "Only show clients the user is allowed to access" falls
+out of that join for free: `clients` is itself RLS-scoped by
+`app_accessible_client_ids()`, so a view row for a client this
+session can no longer reach (e.g. an assignment removed after the
+view was recorded) just doesn't join — no separate filter needed,
+and proven by a dedicated test rather than assumed (see below).
+
+**`app/(app)/layout.tsx`**: `SidebarShell`'s `recentClients` prop is
+now populated for every firm-staff role, not just Encoder —
+`platform_admin` is the one exclusion (its dashboard's "clients" are
+firms across the whole platform, not something this per-client-page
+layout ever wraps, so there's nothing for the query to reflect). "For
+roles that already have a Clients link, keep it and add Recent
+clients below it" needed no code change at all: the section already
+rendered below `navItems` in the same `<nav>`, and `staffNav()`
+already gives every role but Encoder a Clients link — the two just
+stack naturally once `recentClients` stops being conditioned on
+`role === "encoder"`.
+
+**Tests**: new `db/__tests__/user-client-views.test.ts` (8 tests) —
+`recordClientView()` upserts in place rather than duplicating a row
+on a second view; a user cannot record a view for a client they
+can't access (`WITH CHECK` rejects it) while Owner can for any client
+in the firm; direct RLS proof that one user's `SELECT` never returns
+another's rows and that a user can't `INSERT` a view attributed to
+someone else; `getRecentClientsForUser()` orders by recency (not
+insertion order), respects `limit`, and — the one genuinely
+load-bearing behavior proven rather than assumed — a view row for a
+client whose assignment was since removed silently drops out of the
+result instead of leaking a client the session can no longer access.
+
+**Verified**: `pnpm db:generate` produced a clean single-table
+migration; `pnpm db:migrate` applied both it and 015 without issue
+against a database already carrying everything through PR #28/#29.
+`tsc --noEmit` and `pnpm build` both clean. `pnpm test`: 232/232 (224
+above + 8 new). UI not manually driven in a browser in this
+environment, same limitation as every prior PR in this session.

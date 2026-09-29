@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
-import { getRecentClientsForEncoder, type RecentClientRow } from "@/lib/data/dashboard";
+import { getRecentClientsForUser, type RecentClientRow } from "@/lib/data/clients";
 import { logoutAction } from "./logout-action";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -67,7 +67,7 @@ function SidebarShell({
 }: {
   user: { name: string; role: Role };
   navItems: NavItem[];
-  /** Encoder-only — see getRecentClientsForEncoder's own doc comment for what "recent" means here. Undefined/empty for every other role, which just renders no section at all. */
+  /** Every firm-staff role (not platform_admin, which has no per-client "clients" in this sense) — see getRecentClientsForUser's own doc comment for what "recent" means here. Undefined/empty just renders no section at all. */
   recentClients?: RecentClientRow[];
   children: React.ReactNode;
 }) {
@@ -151,7 +151,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // from /dashboard, not by using this nav at all.
   if (user && SIDEBAR_ROLES.has(user.role)) {
     const navItems = user.role === "platform_admin" ? PLATFORM_ADMIN_NAV : staffNav(user.role);
-    const recentClients = user.role === "encoder" ? await getRecentClientsForEncoder(user.id) : undefined;
+    // Every firm-staff role gets Recent Clients — platform_admin's "clients"
+    // (the platform firms table) aren't per-client pages this layout ever
+    // wraps, so there's nothing for getRecentClientsForUser() to reflect.
+    const recentClients = user.role === "platform_admin" ? undefined : await getRecentClientsForUser(user.id);
     return (
       <SidebarShell user={user} navItems={navItems} recentClients={recentClients}>
         {children}

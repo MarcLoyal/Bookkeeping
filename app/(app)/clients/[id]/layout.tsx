@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/current-user";
-import { getClient } from "@/lib/data/clients";
+import { getClient, recordClientView } from "@/lib/data/clients";
 
 const TABS = [
   { href: "", label: "Overview" },
@@ -35,6 +35,16 @@ export default async function ClientLayout({
 
   if (!client) {
     return <div>{children}</div>;
+  }
+
+  // Best-effort, never blocks rendering: this is sidebar-navigation
+  // metadata (see getRecentClientsForUser()), not something any page's
+  // correctness depends on. `user` is guaranteed defined here — `client`
+  // only resolved because `getClient(user.id, id)` was called above.
+  try {
+    await recordClientView(user!.id, id);
+  } catch (err) {
+    console.error("recordClientView failed:", err);
   }
 
   // Encoder's only legitimate pages under a client are the draft-entry

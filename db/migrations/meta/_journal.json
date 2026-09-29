@@ -57,6 +57,13 @@
       "when": 1790607376431,
       "tag": "0007_chilly_arachne",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790690763447,
+      "tag": "0008_dapper_gideon",
+      "breakpoints": true
     }
   ]
 }
