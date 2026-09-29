@@ -19,10 +19,11 @@ import * as schema from "./schema";
  * the Google-sign-in "name your firm" onboarding step),
  * lib/auth/oauth-callback.ts (checking whether a just-authenticated Google
  * identity already has a profile row), and
- * lib/auth/invite-platform-admin.ts (checking whether an email is already
- * registered anywhere, across every firm, before inviting it as a platform
- * admin — the invite's actual profile-row insert still goes through
- * withUserContext() and normal RLS, only this pre-check bypasses it).
+ * lib/auth/invite-platform-admin.ts and lib/auth/create-team-member.ts
+ * (both checking whether an email is already registered anywhere, across
+ * every firm, before inviting it — the invite's actual profile-row insert
+ * still goes through withUserContext() and normal RLS, only this
+ * pre-check bypasses it).
  *
  * Do NOT import this for anything else. Every other query must go through
  * db/client.ts's withUserContext() so RLS is enforced.

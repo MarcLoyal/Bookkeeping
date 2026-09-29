@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { History, LayoutDashboard, Percent, ShieldCheck, Users } from "lucide-react";
+import { History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
 import { logoutAction } from "./logout-action";
@@ -38,6 +38,9 @@ function staffNav(role: Role): NavItem[] {
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/clients", label: "Clients", icon: Users },
   ];
+  if (role === "firm_admin" || role === "bookkeeper") {
+    items.push({ href: "/settings/team", label: "Team", icon: UserPlus });
+  }
   if (role === "firm_admin") {
     items.push({ href: "/settings/tax-rules", label: "Tax Rules", icon: Percent }, { href: "/settings/audit-log", label: "Audit Log", icon: History });
   }

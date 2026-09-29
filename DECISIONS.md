@@ -2128,13 +2128,80 @@ to scope by the same firm that owns its `TEST_CLIENT_ID` fixture,
 matching the pattern `acceptance.test.ts` already used correctly.
 
 Deliberately **not** covered here (PR B's territory — invites and the
-team page don't exist yet): the last-Owner rule, invite expiry/
-revocation, Google-invite email matching. PR B gets its own test file
-for those.
+team page don't exist yet at the time this paragraph was written; see
+the follow-up below for the narrow slice that now does): the
+last-Owner rule, invite expiry/revocation, Google-invite email
+matching. PR B gets its own test file for those.
 
 **Verified**: `tsc --noEmit`, `pnpm test` (170 tests — 138 pre-existing
 + 32 new, all passing against the real local Postgres), `pnpm build`
 all clean.
+
+### Follow-up: a minimal "add team member" flow, pulled forward from PR B
+
+While testing PR A on the real Supabase project, the next thing needed
+was a way to actually create the Encoder demo-equivalent account
+*through the app* (logged in as Bookkeeper) rather than via `pnpm seed`
+— which surfaced that **no one could add a team member from the app at
+all yet**: PR A only built the role model + RLS, and PR B (invites +
+team page) hadn't started. Rather than block on the full PR B scope,
+this adds just enough to unblock that test, with three explicit rules:
+
+1. **Bookkeeper can only create Encoder accounts** — enforced by
+   `db/sql/010_bookkeeper_add_encoder_rls.sql`'s rewritten
+   `users_insert` policy (`WITH CHECK`s the new row's `role` when the
+   inserting session is a bookkeeper), not just by the form only
+   offering "Encoder" when the current user isn't an Owner. Owner keeps
+   the original unrestricted insert.
+2. **Bookkeeper can only assign that Encoder to clients the Bookkeeper
+   is assigned to** — the rewritten `uca_write` policy on
+   `user_client_assignments` requires, for a bookkeeper-authored row,
+   both `client_id IN (SELECT app_accessible_client_ids())` (the same
+   function edit/create already use for scope-respecting access) and
+   that the target user is an Encoder in the bookkeeper's own firm (so
+   this can't be repurposed to touch some other staff member's
+   assignments). A bookkeeper-created Encoder is always `access_scope
+   = 'assigned'` with at least one client required — defaulting it to
+   `'all'` would hand the new Encoder broader access than the
+   Bookkeeper who created it has any business granting, even for an
+   `'all'`-scope Bookkeeper.
+3. **Owner can still add any role** — both policies stay unconditional
+   for `firm_admin`, unchanged from before.
+
+`lib/auth/create-team-member.ts` mirrors `invite-platform-admin.ts`'s
+already-proven shape: `supabase.auth.admin.inviteUserByEmail()` sends
+Supabase's own invite email, landing at the existing
+`app/auth/confirm/route.ts` (already generic over OTP `type`, no
+change needed) and on to `/reset-password` to set a password — the
+exact same landing path the password-reset flow already uses and has
+been verified live, rather than a new untested email flow. New page:
+`/settings/team` (`requireTeamManageAccess()`: Owner or Bookkeeper),
+with a nav link shown only to those two roles.
+
+Not built (deliberately out of scope for this slice, still PR B's
+job): editing/deactivating an existing member, removing a client
+assignment after the fact, invite expiry/revocation, the last-Owner
+rule, a firm's seat/plan limit on how many members can be added.
+
+Also seeded the one demo row this surfaced was missing:
+`viewer@keepbooks.demo` never got backfilled into an already-seeded
+project the way `encoder@keepbooks.demo` didn't either — but the user
+wants to create their own Encoder through the new team page above to
+test it end-to-end, not have the seed script mint a second one.
+`scripts/seed-viewer-demo-user.ts` inserts just the missing viewer row
+into the existing demo firm (idempotent, `ON CONFLICT` on the unique
+email index) — `db/seed.ts` itself can't be re-run for this, since its
+`main()` short-circuits entirely once "Keep.Books Demo Firm" already
+exists.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (176 tests — 170 above + 6
+new RLS tests for `users_insert`/`uca_write`), `pnpm build` all clean.
+Not verified live against Supabase (no real inbox to receive the
+invite email in this environment) — the invite call itself reuses
+`inviteUserByEmail()`/`app/auth/confirm/route.ts` exactly as already
+proven by `invite-platform-admin.ts` and the password-reset flow, so
+the only genuinely new surface is the RLS policies above, which are
+covered by real DB-level tests.
 
 ## Known non-blocking follow-ups
 

@@ -40,7 +40,7 @@ and a database in.
 pnpm install
 cp .env.example .env.local   # then fill in DATABASE_URL / MIGRATION_DATABASE_URL / AUTH_SECRET
 pnpm db:migrate               # drizzle-kit table migrations + hand-authored SQL (triggers/RLS)
-pnpm seed                     # one firm, 3 users, 2 demo clients with ~120+ transactions each
+pnpm seed                     # one firm, 5 users, 2 demo clients with ~120+ transactions each
 pnpm dev
 ```
 
@@ -59,6 +59,7 @@ pnpm lint            # eslint
 pnpm db:generate     # regenerate drizzle-kit migrations after a schema change
 pnpm db:migrate      # apply table migrations, then db/sql/001_functions_triggers_rls.sql
 pnpm seed            # idempotent — re-running is safe, early-exits if already seeded
+pnpm seed-viewer-demo-user  # gap-filler for a project seeded before viewer@keepbooks.demo existed — idempotent
 pnpm test            # fast unit tests (Vitest) — no server, no browser required
 pnpm test:e2e        # Playwright-backed acceptance test #10 (loose-leaf PDF) — needs the app server running
 ```

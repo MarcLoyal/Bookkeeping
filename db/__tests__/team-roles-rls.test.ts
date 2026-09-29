@@ -544,3 +544,71 @@ describe("accounts/contacts: structural edits (Owner+Bookkeeper only)", () => {
     ).rejects.toThrow();
   });
 });
+
+// 010_bookkeeper_add_encoder_rls.sql — a Bookkeeper adding a team member
+// through the app (see lib/auth/create-team-member.ts). These insert
+// directly as the RLS-enforcing role, bypassing the app layer entirely —
+// proving the restriction is real even if a bug ever let the wrong role
+// or clientIds reach the insert.
+describe("team invites: Bookkeeper can only add Encoders, scoped to their own clients", () => {
+  async function cleanupUser(id: string) {
+    await ownerDb.delete(schema.userClientAssignments).where(eq(schema.userClientAssignments.userId, id));
+    await ownerDb.delete(schema.users).where(eq(schema.users.id, id));
+  }
+
+  it("Bookkeeper CAN insert a new Encoder in their own firm", async () => {
+    const id = crypto.randomUUID();
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-new-encoder-${id}@test.local`, name: "New Encoder", role: "encoder", accessScope: "assigned" })
+    );
+    const [row] = await ownerDb.select().from(schema.users).where(eq(schema.users.id, id));
+    expect(row).toBeDefined();
+    expect(row.role).toBe("encoder");
+    await cleanupUser(id);
+  });
+
+  it("Bookkeeper CANNOT insert a new Bookkeeper, Reviewer, Viewer, or Owner", async () => {
+    for (const role of ["bookkeeper", "reviewer", "viewer", "firm_admin"] as const) {
+      const id = crypto.randomUUID();
+      await expect(
+        withUserContext(BOOKKEEPER_ID, (tx) =>
+          tx.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-blocked-${id}@test.local`, name: "Blocked", role, accessScope: "all" })
+        )
+      ).rejects.toThrow();
+    }
+  });
+
+  it("Owner CAN insert a new member of any role (e.g. Viewer)", async () => {
+    const id = crypto.randomUUID();
+    await withUserContext(OWNER_ID, (tx) =>
+      tx.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-owner-added-viewer-${id}@test.local`, name: "Owner-added Viewer", role: "viewer", accessScope: "all" })
+    );
+    const [row] = await ownerDb.select().from(schema.users).where(eq(schema.users.id, id));
+    expect(row).toBeDefined();
+    await cleanupUser(id);
+  });
+
+  it("'assigned'-scope Bookkeeper CAN assign their new Encoder to a client they themselves can access", async () => {
+    const id = crypto.randomUUID();
+    await ownerDb.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-scoped-encoder-${id}@test.local`, name: "Scoped Encoder", role: "encoder", accessScope: "assigned" });
+    await withUserContext(ASSIGNED_BOOKKEEPER_ID, (tx) => tx.insert(schema.userClientAssignments).values({ userId: id, clientId: CLIENT_ASSIGNED_ID }));
+    const rows = await ownerDb.select().from(schema.userClientAssignments).where(eq(schema.userClientAssignments.userId, id));
+    expect(rows).toHaveLength(1);
+    await cleanupUser(id);
+  });
+
+  it("'assigned'-scope Bookkeeper CANNOT assign their new Encoder to a client outside their own access", async () => {
+    const id = crypto.randomUUID();
+    await ownerDb.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-scoped-encoder-2-${id}@test.local`, name: "Scoped Encoder 2", role: "encoder", accessScope: "assigned" });
+    await expect(
+      withUserContext(ASSIGNED_BOOKKEEPER_ID, (tx) => tx.insert(schema.userClientAssignments).values({ userId: id, clientId: CLIENT_UNASSIGNED_ID }))
+    ).rejects.toThrow();
+    await cleanupUser(id);
+  });
+
+  it("Bookkeeper CANNOT assign a client to a non-Encoder user, even one they can otherwise access", async () => {
+    await expect(
+      withUserContext(BOOKKEEPER_ID, (tx) => tx.insert(schema.userClientAssignments).values({ userId: REVIEWER_ID, clientId: CLIENT_ASSIGNED_ID }))
+    ).rejects.toThrow();
+  });
+});

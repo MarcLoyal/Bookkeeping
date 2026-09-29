@@ -104,6 +104,13 @@ export async function requireFirmAdmin(): Promise<CurrentUser> {
   return user;
 }
 
+/** Gates the team page — Owner and Bookkeeper only (Bookkeeper limited to inviting Encoders once there, both in the UI and again by db/sql/010_bookkeeper_add_encoder_rls.sql). */
+export async function requireTeamManageAccess(): Promise<CurrentUser> {
+  const user = await requireCurrentUser();
+  if (user.role !== "firm_admin" && user.role !== "bookkeeper") redirect("/dashboard");
+  return user;
+}
+
 export async function requirePlatformAdmin(): Promise<CurrentUser> {
   const user = await requireCurrentUser();
   if (user.role !== "platform_admin") redirect("/dashboard");
