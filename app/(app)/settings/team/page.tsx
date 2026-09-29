@@ -15,7 +15,7 @@ export default async function TeamPage() {
       <h2 className="text-lg font-semibold">Team</h2>
       <p className="mt-1 text-sm text-slate-500">
         {isOwner
-          ? "Invite team members and set their role. Owner and Bookkeeper see every client by default unless you assign specific ones."
+          ? "Invite team members and set their role. As Owner, you always see every client. A new Bookkeeper sees every client by default too, unless you assign specific ones — Encoder, Reviewer, and Viewer are always limited to the clients you assign (Encoder needs at least one picked now)."
           : "Add Encoder accounts and assign them to your own clients. Only an Owner can add other roles."}
       </p>
 

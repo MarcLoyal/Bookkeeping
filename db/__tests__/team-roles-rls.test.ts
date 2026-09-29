@@ -42,10 +42,15 @@ const CLIENT_ASSIGNED_ID = "00000000-0000-4000-9100-000000000002"; // in every a
 const CLIENT_UNASSIGNED_ID = "00000000-0000-4000-9100-000000000003"; // never assigned to anyone
 
 const OWNER_ID = "00000000-0000-4000-9100-000000000010";
-const BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000011";
+const BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000011"; // access_scope 'all' — Owner/Bookkeeper are the only roles still allowed this
+// REVIEWER_ID/ENCODER_A_ID/ENCODER_B_ID/VIEWER_ID: access_scope 'assigned'
+// (013_role_access_scope_check.sql — Encoder/Reviewer/Viewer may never be
+// 'all'), each granted BOTH clients explicitly below so their effective
+// visibility is unchanged from when they were 'all' — every existing test
+// that expects one of these to see/act on both clients keeps working.
 const REVIEWER_ID = "00000000-0000-4000-9100-000000000012";
-const ENCODER_A_ID = "00000000-0000-4000-9100-000000000013"; // access_scope 'all'
-const ENCODER_B_ID = "00000000-0000-4000-9100-000000000014"; // access_scope 'all' — for "can't see A's drafts"
+const ENCODER_A_ID = "00000000-0000-4000-9100-000000000013";
+const ENCODER_B_ID = "00000000-0000-4000-9100-000000000014"; // — for "can't see A's drafts"
 const VIEWER_ID = "00000000-0000-4000-9100-000000000015";
 const ASSIGNED_ENCODER_ID = "00000000-0000-4000-9100-000000000016"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
 const UNASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000017"; // access_scope 'assigned', zero grants
@@ -94,10 +99,10 @@ beforeAll(async () => {
 
   await upsertUser(OWNER_ID, "rls-owner@test.local", "firm_admin", "all");
   await upsertUser(BOOKKEEPER_ID, "rls-bookkeeper@test.local", "bookkeeper", "all");
-  await upsertUser(REVIEWER_ID, "rls-reviewer@test.local", "reviewer", "all");
-  await upsertUser(ENCODER_A_ID, "rls-encoder-a@test.local", "encoder", "all");
-  await upsertUser(ENCODER_B_ID, "rls-encoder-b@test.local", "encoder", "all");
-  await upsertUser(VIEWER_ID, "rls-viewer@test.local", "viewer", "all");
+  await upsertUser(REVIEWER_ID, "rls-reviewer@test.local", "reviewer", "assigned");
+  await upsertUser(ENCODER_A_ID, "rls-encoder-a@test.local", "encoder", "assigned");
+  await upsertUser(ENCODER_B_ID, "rls-encoder-b@test.local", "encoder", "assigned");
+  await upsertUser(VIEWER_ID, "rls-viewer@test.local", "viewer", "assigned");
   await upsertUser(ASSIGNED_ENCODER_ID, "rls-assigned-encoder@test.local", "encoder", "assigned");
   await upsertUser(UNASSIGNED_BOOKKEEPER_ID, "rls-unassigned-bookkeeper@test.local", "bookkeeper", "assigned");
   await upsertUser(ASSIGNED_BOOKKEEPER_ID, "rls-assigned-bookkeeper@test.local", "bookkeeper", "assigned");
@@ -124,6 +129,19 @@ beforeAll(async () => {
     .values([
       { userId: ASSIGNED_ENCODER_ID, clientId: CLIENT_ASSIGNED_ID },
       { userId: ASSIGNED_BOOKKEEPER_ID, clientId: CLIENT_ASSIGNED_ID },
+      // REVIEWER_ID/ENCODER_A_ID/ENCODER_B_ID/VIEWER_ID can no longer be
+      // access_scope 'all' (013_role_access_scope_check.sql), so they're
+      // granted both clients explicitly here to preserve the "sees
+      // everything in the firm" behavior the rest of this file's tests
+      // were written against.
+      { userId: REVIEWER_ID, clientId: CLIENT_ASSIGNED_ID },
+      { userId: REVIEWER_ID, clientId: CLIENT_UNASSIGNED_ID },
+      { userId: ENCODER_A_ID, clientId: CLIENT_ASSIGNED_ID },
+      { userId: ENCODER_A_ID, clientId: CLIENT_UNASSIGNED_ID },
+      { userId: ENCODER_B_ID, clientId: CLIENT_ASSIGNED_ID },
+      { userId: ENCODER_B_ID, clientId: CLIENT_UNASSIGNED_ID },
+      { userId: VIEWER_ID, clientId: CLIENT_ASSIGNED_ID },
+      { userId: VIEWER_ID, clientId: CLIENT_UNASSIGNED_ID },
     ])
     .onConflictDoNothing();
 
@@ -177,7 +195,10 @@ async function seedDraftEntry(createdBy: string, clientId = CLIENT_ASSIGNED_ID) 
 
 describe("access_scope: client visibility", () => {
   it("'all' scope sees every client in the firm", async () => {
-    const ids = await withUserContext(ENCODER_A_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
+    // BOOKKEEPER_ID, not an Encoder/Reviewer/Viewer — those three can never
+    // be access_scope 'all' (013_role_access_scope_check.sql), so Bookkeeper
+    // is the only non-Owner role left that can actually demonstrate this.
+    const ids = await withUserContext(BOOKKEEPER_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
     const idSet = new Set(ids.map((r) => r.id));
     expect(idSet.has(CLIENT_ASSIGNED_ID)).toBe(true);
     expect(idSet.has(CLIENT_UNASSIGNED_ID)).toBe(true);
@@ -604,8 +625,11 @@ describe("team invites: Bookkeeper can only add Encoders, scoped to their own cl
 
   it("Owner CAN insert a new member of any role (e.g. Viewer)", async () => {
     const id = crypto.randomUUID();
+    // accessScope: "assigned", not "all" — Viewer may never be 'all'
+    // (013_role_access_scope_check.sql's CHECK constraint), unrelated to
+    // what this test actually proves (Owner can insert any role at all).
     await withUserContext(OWNER_ID, (tx) =>
-      tx.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-owner-added-viewer-${id}@test.local`, name: "Owner-added Viewer", role: "viewer", accessScope: "all" })
+      tx.insert(schema.users).values({ id, firmId: FIRM_ID, email: `rls-owner-added-viewer-${id}@test.local`, name: "Owner-added Viewer", role: "viewer", accessScope: "assigned" })
     );
     const [row] = await ownerDb.select().from(schema.users).where(eq(schema.users.id, id));
     expect(row).toBeDefined();

@@ -2754,3 +2754,138 @@ this environment (no way to run the dev server against a real
 Supabase project here) — reviewed by hand against the same
 `useActionState`/amber-warning conventions already established and
 proven on this page's existing add-member form.
+
+## Bug fix: Owner-invited Encoder with zero clients got "every client" access
+
+**The report**: an Owner invited an Encoder without ticking any client
+checkboxes, and the new Encoder showed up on the Team page with "Every
+client" access — full firm-wide visibility, for a role whose entire
+point is a narrow, assigned slice. Root cause in
+`createTeamMember()`'s `accessScope` computation:
+`role === "viewer" || clientIds.length > 0 ? "assigned" : "all"` only
+special-cased Viewer. An Owner-invited Encoder or Reviewer with zero
+clients ticked fell through to the `"all"` branch — the Bookkeeper's
+own invite form already required at least one client for its
+Encoders (`clientIds.length === 0` check, scoped to
+`currentUser.role === "bookkeeper"`), but that requirement never
+applied to an Owner's invite of the same role.
+
+**The rule, as given**: Encoder, Reviewer, and Viewer must always be
+`access_scope` `'assigned'`, never `'all'` — regardless of who's
+inviting. Only Owner and Bookkeeper may default to `'all'`. Encoder
+additionally requires at least one client picked at invite time
+(matching the Bookkeeper form's existing requirement, now applied
+uniformly instead of only when the inviter is a Bookkeeper); Reviewer
+and Viewer may start at zero clients and be assigned later, since
+neither needs to be immediately useful the moment it's created the
+way Encoder's whole point does.
+
+**`lib/auth/create-team-member.ts`**: the old
+`if (currentUser.role === "bookkeeper") { ... }` block's
+zero-clients-for-Encoder check is now unconditional on the inviter —
+`if (role === "encoder" && clientIds.length === 0)` fires regardless
+of who's inviting. `accessScope` is now
+`const canDefaultToAll = role === "firm_admin" || role === "bookkeeper"; const accessScope = canDefaultToAll && clientIds.length === 0 ? "all" : "assigned";`
+— only those two roles can ever land on `'all'`.
+
+**Enforced at the database level, not just in application code**
+(the actual ask — app-layer checks are a courtesy for a clean error
+message, not the backstop): `db/sql/013_role_access_scope_check.sql`
+adds `CHECK (NOT (role IN ('encoder', 'reviewer', 'viewer') AND access_scope = 'all'))`
+on `users`. A CHECK constraint, not a trigger — this is a stateless
+per-row invariant with no OLD/NEW column-diffing involved (unlike
+`enforce_reviewer_status_only_update` and friends), and it needs to
+apply universally, including to the owner/bypass Postgres connection
+used for admin operations — the opposite of RLS, which is
+intentionally role-scoped and bypassable by that same connection.
+`platform_admin` and `client_user` are deliberately excluded:
+`access_scope` isn't semantically meaningful for either (`platform_admin`
+has no firm at all; `client_user`'s access is its own `client_id`
+column, never `access_scope`/`user_client_assignments`), and neither
+was named in "Owner and Bookkeeper only."
+
+`ADD CONSTRAINT ... CHECK` validates every existing row by default, so
+the migration backfills first: (1) any existing encoder/reviewer/viewer
+row already sitting at `'all'` (from the bug above, wherever it's been
+hit) is corrected to `'assigned'`; (2) `encoder@keepbooks.demo`
+specifically — seeded with `'all'` deliberately, before this rule
+existed — is granted both seeded demo clients explicitly first, so
+fix #1 doesn't take it from "sees every demo client" to "sees nothing
+at all" as a side effect, matching what
+`scripts/seed-viewer-demo-user.ts` already did for the demo Viewer.
+
+**A second, closely-related bug caught while auditing `db/seed.ts`
+for the same issue**: the seeded `reviewer` row never set
+`accessScope` explicitly at all, relying on the column's own default
+(`'all'`) — which the new constraint now rejects outright. Since
+`db/seed.ts` runs *after* all migrations (so 013's one-time backfill,
+a migration-time-only UPDATE, never touches a row inserted later),
+this would have made a fresh `pnpm db:migrate && pnpm seed` crash on
+any new database. Fixed by setting `accessScope: "assigned"`
+explicitly on both the `reviewer` and `encoder` seed inserts, with
+matching `user_client_assignments` grants to both demo clients for
+each (previously only the Viewer got this treatment) — every demo
+account now has something to work with.
+
+**Team page copy** (`app/(app)/settings/team/page.tsx`): the old text
+— "Owner and Bookkeeper see every client by default unless you assign
+specific ones" — was inaccurate for Owner specifically.
+`app_accessible_client_ids()`'s `firm_admin` branch
+(`db/sql/001_functions_triggers_rls.sql`) has no `access_scope`
+condition at all: an Owner sees every client in the firm
+unconditionally, regardless of what `access_scope`/assignments say on
+their own row. Assigning an Owner specific clients would never
+actually narrow their access — the old copy implied otherwise.
+Rewritten to say Owner is always full access, a new Bookkeeper invite
+defaults to every client unless scoped down, and Encoder/Reviewer/
+Viewer are always limited to assigned clients (Encoder needing at
+least one picked now). The add-member form's client-picker label had
+the same bug in miniature — a single `isOwner`-only ternary claimed
+"leave blank for access to every client" for every role Owner could
+invite, which is now simply false for Encoder (rejected outright) and
+misleading for Reviewer/Viewer (sees nothing, not everything). Made
+role-aware: `"...leave blank for access to every client"` only for
+Bookkeeper, `"required"` for Encoder, `"optional — they'll see
+nothing until you assign at least one"` for Reviewer/Viewer.
+
+**Test fixture ripple**: the new constraint immediately exposed every
+place a test fixture relied on Encoder/Reviewer/Viewer being `'all'`
+(often as a stand-in for "sees every client in the firm," since
+`'all'` used to be the easy way to get that). Fixed in
+`team-roles-rls.test.ts`, `team-lifecycle-rls.test.ts`, and
+`create-team-member.test.ts`: switched those fixtures to `'assigned'`
+with explicit `user_client_assignments` grants to every client they
+previously saw implicitly, so downstream test assertions about "sees
+both clients" keep holding without being rewritten; repointed the one
+test that specifically demonstrates `'all'`-scope behavior
+(`"'all' scope sees every client in the firm"`) from an Encoder
+fixture to `BOOKKEEPER_ID`, the only non-Owner role left that can
+actually prove it; and switched three `create-team-member.test.ts`
+tests that used `role: "encoder", clientIds: []` purely to reach the
+*email-already-exists* branch over to `role: "viewer"` instead, since
+Encoder's new zero-clients rejection now fires before that check ever
+runs and those tests were never about Encoder's client requirement in
+the first place.
+
+**Verified**: `pnpm db:migrate` applies 013 cleanly against a
+database already carrying the pre-fix data (backfill + constraint,
+no manual intervention needed). `tsc --noEmit` and `pnpm build` both
+clean. `pnpm test`: all suites pass except two pre-existing failures
+in `team-roles-rls.test.ts` (`journal_entries`/`sales_invoices`
+Encoder-can't-see-another-encoder's-draft) that are unrelated to this
+fix — traced directly to this sandbox's local Postgres having a stray
+`journal_entries_select`/`sales_invoices_select` policy left over from
+separately testing PR #29 (`claude/encoder-transaction-visibility`,
+migration `013_encoder_read_all_client_entries.sql`) against the same
+shared database earlier in this session; confirmed via
+`pg_get_expr(polqual, ...)` that the live policy text lacks the
+`app_current_role() != 'encoder' OR created_by = app_current_user_id()`
+clause this branch's own `009_team_roles_rls.sql` defines, and
+`_sql_migrations_applied` shows `013_encoder_read_all_client_entries.sql`
+recorded as applied — a migration that does not exist anywhere in
+this branch's `db/sql/`. Restoring the correct policy locally needs a
+`DROP POLICY`/`CREATE POLICY` pair that this environment's safety
+tooling declined to run automatically; a database that has only ever
+run this branch's own migrations (any fresh `pnpm db:migrate`,
+including yours) was never exposed to that stray migration and won't
+show this failure.

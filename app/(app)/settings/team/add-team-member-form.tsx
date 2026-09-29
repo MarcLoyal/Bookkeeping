@@ -33,6 +33,19 @@ export function AddTeamMemberForm({
   // Bookkeeper's invite is always client-scoped (see createTeamMember).
   const showClientPicker = role !== "firm_admin";
 
+  // Only Bookkeeper may still default to "every client" when left blank —
+  // Encoder, Reviewer, and Viewer can never be access_scope 'all'
+  // (013_role_access_scope_check.sql's CHECK constraint is the real
+  // backstop). Encoder additionally requires at least one client up front
+  // (a zero-client Encoder would have no way to see anything); Reviewer
+  // and Viewer may start at zero and be assigned later.
+  const clientPickerLabel =
+    role === "bookkeeper"
+      ? "Assign to specific clients (leave blank for access to every client)"
+      : role === "encoder"
+        ? "Assign to clients (required)"
+        : "Assign to clients (optional — they'll see nothing until you assign at least one)";
+
   return (
     <form ref={formRef} action={formAction} className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -100,9 +113,7 @@ export function AddTeamMemberForm({
 
       {showClientPicker && (
         <div>
-          <p className="text-xs font-medium text-slate-700">
-            {isOwner ? "Assign to specific clients (leave blank for access to every client)" : "Assign to clients (required)"}
-          </p>
+          <p className="text-xs font-medium text-slate-700">{isOwner ? clientPickerLabel : "Assign to clients (required)"}</p>
           {clients.length === 0 ? (
             <p className="mt-1 text-sm text-slate-500">No clients available to assign.</p>
           ) : (

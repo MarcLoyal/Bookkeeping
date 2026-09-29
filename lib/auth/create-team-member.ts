@@ -47,14 +47,17 @@ export type CreateTeamMemberResult = { ok: true; warning?: string } | { ok: fals
  *     checked here for a clean error message, and enforced again (the
  *     real backstop) by db/sql/010_bookkeeper_add_encoder_rls.sql.
  *
- * A Bookkeeper's new Encoder is always access_scope 'assigned' with at
- * least one client required: defaulting it to 'all' would hand the new
- * Encoder broader access than the Bookkeeper who created it has any
- * business granting. A new Viewer is also always 'assigned' (even with
- * zero clients picked) — a read-only role has no business defaulting to
- * every client in the firm. Every other Owner-created role defaults to
- * 'all' unless specific clients are picked, matching accessScopeEnum's
- * documented general intent (db/schema/enums.ts).
+ * A new Encoder, Reviewer, or Viewer is always access_scope 'assigned' —
+ * never 'all', regardless of who's inviting or how many clients are
+ * picked — see db/sql/013_role_access_scope_check.sql's CHECK
+ * constraint, the real backstop. Encoder additionally requires at least
+ * one client at creation time (checked above): defaulting it to zero
+ * clients would create an Encoder with no way to see anything at all.
+ * Reviewer/Viewer may start with zero (sees nothing until an Owner
+ * assigns some) since neither role needs to be immediately useful the
+ * moment it's created the way Encoder's whole point does. Only Owner and
+ * Bookkeeper may default to 'all' (unless specific clients are picked),
+ * matching accessScopeEnum's documented general intent (db/schema/enums.ts).
  *
  * Three outcomes for an email that already has SOME identity:
  *   1. Already a member of THIS firm — reported as such, nothing changed.
@@ -97,13 +100,15 @@ export async function createTeamMember(currentUser: CurrentUser, input: unknown)
   }
   const { email, name, role, clientIds } = parsed.data;
 
-  if (currentUser.role === "bookkeeper") {
-    if (role !== "encoder") {
-      return { ok: false, error: "Bookkeepers can only add Encoder accounts." };
-    }
-    if (clientIds.length === 0) {
-      return { ok: false, error: "Pick at least one client to assign this Encoder to." };
-    }
+  if (currentUser.role === "bookkeeper" && role !== "encoder") {
+    return { ok: false, error: "Bookkeepers can only add Encoder accounts." };
+  }
+  // Applies regardless of who's inviting — an Owner-created Encoder needs
+  // this exactly as much as a Bookkeeper-created one: access_scope 'all'
+  // is never allowed for this role (see accessScope below), so a zero-
+  // client Encoder would be created with no way to see anything at all.
+  if (role === "encoder" && clientIds.length === 0) {
+    return { ok: false, error: "Pick at least one client to assign this Encoder to." };
   }
 
   // Bypasses RLS by design — see db/authClient.ts. Checking whether this
@@ -137,12 +142,18 @@ export async function createTeamMember(currentUser: CurrentUser, input: unknown)
     }
   }
 
-  // Viewer always defaults to 'assigned', even with zero clients picked
-  // (sees nothing until an Owner assigns some) — a read-only role
-  // shouldn't default to seeing every client in the firm just because it
-  // can't write anything. Every other role keeps the general default:
-  // 'assigned' once specific clients are picked, 'all' otherwise.
-  const accessScope = role === "viewer" || clientIds.length > 0 ? "assigned" : "all";
+  // Only Owner and Bookkeeper may ever be access_scope 'all' — enforced
+  // again (the real backstop) by db/sql/013_role_access_scope_check.sql's
+  // CHECK constraint, which rejects an encoder/reviewer/viewer row at
+  // 'all' regardless of how it got there. Encoder/Reviewer/Viewer are
+  // always 'assigned', even with zero clients picked for Reviewer/Viewer
+  // (sees nothing until an Owner assigns some — a read/approve-only role
+  // has no business defaulting to every client in the firm); Encoder
+  // can't reach zero at all, since the check above already requires at
+  // least one. Owner/Bookkeeper keep the original default: 'assigned'
+  // once specific clients are picked, 'all' otherwise.
+  const canDefaultToAll = role === "firm_admin" || role === "bookkeeper";
+  const accessScope = canDefaultToAll && clientIds.length === 0 ? "all" : "assigned";
 
   const supabase = createSupabaseAdminClient();
 

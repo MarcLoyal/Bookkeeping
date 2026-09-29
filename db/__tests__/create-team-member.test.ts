@@ -41,11 +41,11 @@ const OWNER: CurrentUser = {
   role: "firm_admin",
 };
 
-async function upsertUser(id: string, email: string, role: string, firmId: string | null) {
+async function upsertUser(id: string, email: string, role: string, firmId: string | null, accessScope: "all" | "assigned" = "all") {
   await ownerDb
     .insert(schema.users)
-    .values({ id, firmId, email, name: email, role: role as any })
-    .onConflictDoUpdate({ target: schema.users.id, set: { role: role as any, firmId, email } });
+    .values({ id, firmId, email, name: email, role: role as any, accessScope })
+    .onConflictDoUpdate({ target: schema.users.id, set: { role: role as any, firmId, email, accessScope } });
 }
 
 beforeAll(async () => {
@@ -58,7 +58,9 @@ beforeAll(async () => {
     .onConflictDoNothing();
 
   await upsertUser(OWNER_ID, OWNER.email, "firm_admin", FIRM_ID);
-  await upsertUser("00000000-0000-4000-9300-000000000011", SAME_FIRM_MEMBER_EMAIL, "encoder", FIRM_ID);
+  // "assigned", not the upsertUser default ("all") — Encoder may never be
+  // access_scope 'all' (013_role_access_scope_check.sql's CHECK constraint).
+  await upsertUser("00000000-0000-4000-9300-000000000011", SAME_FIRM_MEMBER_EMAIL, "encoder", FIRM_ID, "assigned");
   await upsertUser("00000000-0000-4000-9300-000000000012", OTHER_FIRM_MEMBER_EMAIL, "bookkeeper", OTHER_FIRM_ID);
   await upsertUser("00000000-0000-4000-9300-000000000013", PLATFORM_ADMIN_EMAIL, "platform_admin", null);
 });
@@ -69,13 +71,17 @@ afterAll(async () => {
 
 describe("createTeamMember: an email that already has a public.users row somewhere", () => {
   it("already a member of THIS firm — refuses with a clear 'already a member' message", async () => {
-    const result = await createTeamMember(OWNER, { email: SAME_FIRM_MEMBER_EMAIL, name: "Whoever", role: "encoder", clientIds: [] });
+    // role: "viewer", not "encoder" — Encoder now requires at least one
+    // clientId (see the sibling describe block below), which is a
+    // different check entirely from the one this test proves. Viewer has
+    // no such requirement, so it isolates the email-dedup logic cleanly.
+    const result = await createTeamMember(OWNER, { email: SAME_FIRM_MEMBER_EMAIL, name: "Whoever", role: "viewer", clientIds: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/already a member of this firm/i);
   });
 
   it("already belongs to a DIFFERENT firm — refuses with a clear error, and does not attach", async () => {
-    const result = await createTeamMember(OWNER, { email: OTHER_FIRM_MEMBER_EMAIL, name: "Whoever", role: "encoder", clientIds: [] });
+    const result = await createTeamMember(OWNER, { email: OTHER_FIRM_MEMBER_EMAIL, name: "Whoever", role: "viewer", clientIds: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/different firm/i);
 
@@ -84,7 +90,7 @@ describe("createTeamMember: an email that already has a public.users row somewhe
   });
 
   it("already registered with no firm at all (platform_admin) — refuses, and does not attach", async () => {
-    const result = await createTeamMember(OWNER, { email: PLATFORM_ADMIN_EMAIL, name: "Whoever", role: "encoder", clientIds: [] });
+    const result = await createTeamMember(OWNER, { email: PLATFORM_ADMIN_EMAIL, name: "Whoever", role: "viewer", clientIds: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/already registered/i);
 

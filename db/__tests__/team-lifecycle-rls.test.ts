@@ -84,7 +84,9 @@ beforeAll(async () => {
   await upsertUser(ENCODER_ON_A_ID, "lifecycle-encoder-a@test.local", "encoder", FIRM_ID, "assigned");
   await upsertUser(ENCODER_ON_B_ID, "lifecycle-encoder-b@test.local", "encoder", FIRM_ID, "assigned");
   await upsertUser(ENCODER_UNASSIGNED_ID, "lifecycle-encoder-unassigned@test.local", "encoder", FIRM_ID, "assigned");
-  await upsertUser(REVIEWER_ID, "lifecycle-reviewer@test.local", "reviewer", FIRM_ID);
+  // "assigned", not the upsertUser default ("all") — Reviewer may never be
+  // access_scope 'all' (013_role_access_scope_check.sql's CHECK constraint).
+  await upsertUser(REVIEWER_ID, "lifecycle-reviewer@test.local", "reviewer", FIRM_ID, "assigned");
 
   await upsertUser(OWNER_A_ID, "lifecycle-owner-a@test.local", "firm_admin", TWO_OWNER_FIRM_ID);
   await upsertUser(OWNER_B_ID, "lifecycle-owner-b@test.local", "firm_admin", TWO_OWNER_FIRM_ID);
