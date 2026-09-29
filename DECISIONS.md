@@ -1887,6 +1887,217 @@ up for review** (ran `/code-review` against the diff after opening it):
 Re-verified after the fixes: `tsc --noEmit`, `pnpm test` (138 tests),
 `pnpm build` all clean.
 
+## Team & Roles, PR A: role model + RLS rewrite
+
+First of a 4-PR split (A: roles + RLS — this PR; B: invites + team page;
+C: per-client assignment UI; D folded into B unless it turns out not to
+fit). Confirmed with you before writing any code: the role mapping and
+its two reconciliation points, what per-client access already existed,
+that a migration was needed, and the PR split itself.
+
+### Role mapping and the two reconciliations
+
+`firm_admin` → Owner and `client_user` map with no behavior change.
+Two roles genuinely differed from the new spec and were tightened, both
+approved beforehand:
+
+- **Bookkeeper could not create clients.** `clients_insert` was
+  `firm_admin`-only. Now `firm_admin` or `bookkeeper`
+  (`app_can_manage_structure()`).
+- **Reviewer was identical to Bookkeeper** — full write access via the
+  old blanket `app_is_staff()`-gated policies, with no "post/approve
+  only" distinction anywhere. Tightened via a genuine RLS split
+  (separate INSERT/UPDATE/DELETE policies replacing the old single
+  `FOR ALL` ones) plus a new trigger, `enforce_reviewer_status_only_update()`
+  (mirrors `enforce_journal_entry_immutability()`'s own OLD-vs-NEW
+  column-diffing pattern from 001) — a reviewer's UPDATE on
+  `journal_entries` may only change `status`/`posted_by`/`posted_at`,
+  nothing else, even when bundled into the same UPDATE as a legitimate
+  status change.
+
+**One judgment call flagged, not pre-cleared**: the spec's Bookkeeper
+bullet is "add/edit entries, post, view reports, export, add clients" —
+grammatically "add/edit" modifies *entries*, and "add clients" has no
+matching "edit clients." I extended `clients_update` to Bookkeeper too
+(not just `clients_insert`), since a create-only/permanently-uneditable
+client record seemed like an impractical, likely-unintended reading —
+but this one wasn't explicitly asked for, unlike the other two. Easy to
+narrow back to `firm_admin`-only if that reading's wrong.
+
+Encoder and Viewer are new roles, built fresh — no reconciliation needed.
+
+### Per-client access: `access_scope`, not an inferred default
+
+`app_accessible_client_ids()` and `user_client_assignments` already
+existed exactly as described — every table's RLS already joins through
+it. But the existing behavior was "bookkeeper/reviewer with zero
+assignments see zero clients" (assignment mandatory, no toggle), the
+opposite of what's needed here. Per your explicit correction: added a
+real column, `users.access_scope` (`'all' | 'assigned'`), rather than
+inferring the mode from "has any assignment rows" — inferring it would
+have silently widened access the moment someone's last assignment was
+removed, or the day a plan downgrade took away the Owner's ability to
+manage assignments.
+
+- `firm_admin` ignores this column entirely — Owner always sees every
+  client in the firm, full stop.
+- `bookkeeper`/`reviewer`/`encoder`/`viewer`: `'all'` (the column's
+  default for new rows) sees every firm client; `'assigned'` sees only
+  what's explicitly granted, even if that's currently zero.
+- RLS enforces whichever value is on the row **regardless of plan** —
+  `getPlanLimits(firm).perClientAssignmentAllowed` (this PR: always
+  `true`, trial values only — 5 users, 10 clients) will, in PR C, gate
+  only whether an *Owner can change* the setting in the UI. A downgrade
+  freezing that UI can never by itself widen anyone's actual access.
+- **Migration safety**: every pre-existing `bookkeeper`/`reviewer` row
+  is explicitly backfilled to `'assigned'` (`UPDATE users SET
+  access_scope = 'assigned' WHERE role IN (...)`) — the column's own
+  `DEFAULT 'all'` would otherwise silently widen every existing firm's
+  access the moment this migration ran. Verified live: a fresh
+  zero-assignment `'assigned'` user sees zero clients; an `'all'` user
+  sees every firm client; Owner sees everything regardless.
+
+### The RLS rewrite itself (`db/sql/009_team_roles_rls.sql`)
+
+Replaces every blanket `app_is_staff()`-gated write policy (one
+`FOR ALL` per table, shared by firm_admin/bookkeeper/reviewer alike)
+with per-role, per-action policies. New helper functions:
+`app_can_manage_structure()` (firm_admin/bookkeeper — clients, accounts,
+contacts, client_tax_types) and `app_can_encode()`. `client_counters`
+and `tax_rules` are untouched (still `app_is_staff()`/firm_admin-only
+respectively — nothing in the new spec asks to change either).
+
+`journal_entries`/`journal_lines` carry the real complexity: Encoder's
+INSERT requires `status = 'draft' AND created_by = self`; UPDATE/DELETE
+require `created_by = self AND status = 'draft'` (immutability trigger
+already blocks posted/reversed deletes for everyone); SELECT filters to
+`created_by = self` for Encoder specifically — the RLS-level answer to
+"cannot see other people's entries," not an app-layer filter. The four
+specialized document tables (sales_invoices, purchases, cash_receipts/
+disbursements + their _lines) got the identical pattern, joining through
+to their linked `journal_entries` row via `journal_entry_id` (none of
+them have their own `created_by` column) — their own `status` columns
+are collection/business status, unrelated to draft/posted.
+
+**A real Postgres gotcha rediscovered, not introduced**: `INSERT ...
+RETURNING` re-checks the SELECT policy against a snapshot that doesn't
+yet include the statement's own uncommitted row — `app_accessible_
+client_ids()` (and by extension any INSERT into `clients` with
+`.returning()`) hits this for every role, including firm_admin.
+`lib/data/clients.ts`'s `createClient()` already documented and worked
+around this before this PR touched anything; `db/__tests__/team-roles-
+rls.test.ts` hit the identical false-positive independently while being
+written and uses the same workaround (generate the id client-side, skip
+`.returning()`, confirm with a follow-up SELECT).
+
+**Rollback**: `db/rollback/009_team_roles_rls.sql` restores every
+policy/function/trigger to its exact pre-009 body. Deliberately lives
+outside `db/sql/` — `db:migrate` auto-applies anything in `db/sql/`
+ending in `.sql`, sorted by filename, and a same-named rollback file
+placed there would have sorted *before* `009_team_roles_rls.sql` itself
+and run against a database that hadn't been migrated yet (caught this
+before ever running it, by reasoning through the sort order — no bad
+migration was ever applied).
+
+### A capability that didn't exist yet: standalone drafts
+
+Discovered while wiring Encoder's "add entry" flow: every existing
+`post*()` function (`postGeneralJournal`, `postSalesInvoice`, ...)
+inserts a draft row **only as an internal step**, immediately flipping
+it to posted within the same call — there was no code path anywhere
+that left a journal entry as a genuinely persisted, unposted draft.
+"Unposted Drafts" (the `/drafts` page, the dashboard card) has always
+had real read-side support and a real RLS/DB model (`entryStatusEnum`
+includes `'draft'`, the balance-on-post trigger only fires `IF v_status
+IN ('posted', 'reversed')`) but no write path had ever used it — Encoder
+is the first role that actually needs one. Added `createDraftGeneralJournal()`
+(`lib/data/post-transaction.ts`) and `POST /api/clients/[id]/transactions/
+draft-journal`, reusing `buildGeneralJournalLines()`'s existing
+balance-check. Deliberately general-journal only for now — the four
+specialized document forms still always post immediately; their RLS
+already supports an encoder-authored draft (same as journal_entries),
+but wiring their own forms to a draft-saving path is a UI follow-up, not
+part of this PR's *minimal* encoder flow.
+
+### Encoder's minimal home page
+
+`/dashboard`'s new `encoder` branch (before the firm-facing branch, so
+it never even calls the aggregate queries that branch fetches): their
+own drafts (`listFirmDrafts(user.id)` — needs no `created_by` filter in
+the query itself, RLS's `journal_entries_select` already scopes it to
+"my entries" for this role) plus a client picker that jumps straight to
+the draft-entry form, bypassing the client's full transaction ledger
+entirely. **Editing/deleting an existing draft has full RLS support**
+(covered by the test suite) but no UI built yet — "an add-entry button"
+was the spec's own bar for *this* minimal page; the gap is a contained
+UI follow-up, not an enforcement gap.
+
+### UI-guard audit — what's covered, what leans on RLS alone
+
+"Match the database — hide nav links and buttons a role cannot use,"
+enforced server-side, not just by hiding UI:
+
+- `SidebarShell`'s nav is role-specific (Encoder: Dashboard only, no
+  Clients link; everyone else unchanged plus Owner-only Tax
+  Rules/Audit Log).
+- New `requireReportAccess()` guard (`lib/auth/current-user.ts`) — built
+  on `requireCurrentUser()`, not `requireStaffUser()`, deliberately:
+  client reports and the general ledger book are also how `client_user`
+  views their own client's numbers, so this only excludes Encoder, not
+  every non-staff role. Applied to the reports page and the books page.
+- `/clients/[id]/transactions/new/[type]`: reviewer/viewer redirected
+  outright (neither may add anything); Encoder redirected to
+  `general_journal` specifically if it tries another type.
+- `/clients/[id]/layout.tsx`'s tab bar is skipped entirely for Encoder
+  (Accounts/Contacts/Employees/Payroll/Books/Reports are all things this
+  role has no reason to browse).
+- `/clients/new` and `POST /api/clients`: `firm_admin`/`bookkeeper` only
+  now (was `firm_admin`-only) — the create-client reconciliation, made
+  to actually work end-to-end, not just at the RLS layer.
+- **Not yet given an explicit page-level Encoder redirect**: the
+  Accounts/Contacts/Employees/Payroll CRUD pages themselves. RLS is the
+  real backstop everywhere regardless (verified: Encoder cannot write to
+  any of these; reads return only what `app_accessible_client_ids()`
+  already allows), so nothing is actually exposed — this is a UI-polish
+  gap, not a security one, and the highest-value surfaces (reports,
+  books, transaction creation, the dashboard itself) are covered.
+
+### Demo accounts + tests
+
+Seeded `encoder@keepbooks.demo` / `viewer@keepbooks.demo` into the demo
+firm (`db/seed.ts`, same pattern as the existing three, `access_scope:
+'all'` set explicitly), added to `scripts/migrate-demo-users-to-
+supabase-auth.ts`'s `DEMO_USERS` so they become real, loggable-into
+Supabase Auth identities the same way. **All five demo accounts
+(including these two) must be deleted before launch** — flagged here,
+in `db/seed.ts`'s own completion log, and in README.md.
+
+`db/__tests__/team-roles-rls.test.ts` — 27 tests against the real
+`keepbooks_app` RLS-enforcing role (same pattern as `acceptance.test.ts`):
+`access_scope` visibility (all/assigned/zero-assignment/Owner-always-
+sees-everything), the Bookkeeper client-creation fix, Encoder's full
+add/edit/delete-own + can't-see-others'/can't-post matrix, Reviewer's
+post-only + can't-sneak-a-field-change-in-alongside-a-status-change,
+Viewer's read-only, Bookkeeper's unchanged full access, and
+`sales_invoices` as a representative sample of the four document tables
+(same policy pattern, not independently retested four times). Writing
+these tests caught a real, unrelated test-isolation bug: adding new
+`firm_admin`-role fixture rows exposed that `db/__tests__/payroll.test.ts`'s
+own admin lookup (`WHERE role = 'firm_admin' LIMIT 1`, no firm filter,
+no `ORDER BY`) could non-deterministically pick up a *different* firm's
+firm_admin the moment more than one existed in the dev database — fixed
+to scope by the same firm that owns its `TEST_CLIENT_ID` fixture,
+matching the pattern `acceptance.test.ts` already used correctly.
+
+Deliberately **not** covered here (PR B's territory — invites and the
+team page don't exist yet): the last-Owner rule, invite expiry/
+revocation, Google-invite email matching. PR B gets its own test file
+for those.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (165 tests — 138 pre-existing
++ 27 new, all passing against the real local Postgres), `pnpm build`
+all clean.
+
 ## Known non-blocking follow-ups
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build

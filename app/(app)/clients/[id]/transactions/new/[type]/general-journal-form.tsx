@@ -11,10 +11,19 @@ const labelClass = "block text-sm font-medium text-slate-700";
 
 type Row = { accountCode: string; debit: string; credit: string; memo: string };
 
-export function GeneralJournalForm({ clientId, accounts }: { clientId: string; accounts: Account[] }) {
+export function GeneralJournalForm({
+  clientId,
+  accounts,
+  mode = "post",
+}: {
+  clientId: string;
+  accounts: Account[];
+  /** "draft" saves without posting (Encoder's only entry path — they can't post) and returns to their own drafts list instead of the client's transaction ledger. */
+  mode?: "post" | "draft";
+}) {
   const { submit, error, pending } = useJsonPost<Record<string, unknown>>(
-    `/api/clients/${clientId}/transactions/general-journal`,
-    () => `/clients/${clientId}/transactions`
+    `/api/clients/${clientId}/transactions/${mode === "draft" ? "draft-journal" : "general-journal"}`,
+    () => (mode === "draft" ? "/dashboard" : `/clients/${clientId}/transactions`)
   );
   const [rows, setRows] = useState<Row[]>([
     { accountCode: "", debit: "", credit: "", memo: "" },
@@ -145,7 +154,7 @@ export function GeneralJournalForm({ clientId, accounts }: { clientId: string; a
         disabled={pending || !balanced}
         className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
       >
-        {pending ? "Posting..." : "Post Journal Entry"}
+        {pending ? (mode === "draft" ? "Saving..." : "Posting...") : mode === "draft" ? "Save Draft" : "Post Journal Entry"}
       </button>
     </form>
   );

@@ -1,0 +1,476 @@
+/**
+ * PR A (Team & Roles: role model + RLS) verification — every role's
+ * allowed and denied actions, tested against the REAL RLS-enforcing
+ * `keepbooks_app` DB role via withUserContext(), exactly like
+ * acceptance.test.ts proves DB-level enforcement independent of the app
+ * layer. "Direct URL access must be refused" translates at this layer to:
+ * querying as a role/user who shouldn't see or touch a row must return
+ * nothing / be rejected by Postgres itself, not just by a page guard —
+ * every `expect(...).toHaveLength(0)` and `.rejects.toThrow()` below is
+ * that proof, run the same way a bypassed page guard would hit the DB.
+ *
+ * Scope: sales_invoices is tested once as a representative sample of the
+ * four specialized document tables (purchases, cash_receipts,
+ * cash_disbursements) — all four got the identical policy pattern in
+ * 009_team_roles_rls.sql (firm_admin/bookkeeper full, encoder own-linked-
+ * draft-only via journal_entry_id join, reviewer/viewer read-only), so
+ * this is a structural proof of the pattern, not independent behavior
+ * needing its own duplicate coverage.
+ *
+ * Invites, the last-Owner rule, and Google-invite email matching are PR
+ * B's territory (invites + team page aren't built yet in PR A) — not
+ * covered here; PR B gets its own test file for those.
+ */
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { config as loadEnv } from "dotenv";
+loadEnv({ path: ".env.local" });
+import { and, eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import * as schema from "../schema";
+import { withUserContext } from "../client";
+
+const ownerConn = postgres(process.env.MIGRATION_DATABASE_URL!, { max: 2 });
+const ownerDb = drizzle(ownerConn, { schema });
+
+// Fixed UUIDs, idempotent setup — same pattern acceptance.test.ts uses for
+// its throwaway client, so repeated `pnpm test` runs reuse fixtures rather
+// than accumulating new ones.
+const FIRM_ID = "00000000-0000-4000-9100-000000000001";
+const CLIENT_ASSIGNED_ID = "00000000-0000-4000-9100-000000000002"; // in every assigned-scope user's grant
+const CLIENT_UNASSIGNED_ID = "00000000-0000-4000-9100-000000000003"; // never assigned to anyone
+
+const OWNER_ID = "00000000-0000-4000-9100-000000000010";
+const BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000011";
+const REVIEWER_ID = "00000000-0000-4000-9100-000000000012";
+const ENCODER_A_ID = "00000000-0000-4000-9100-000000000013"; // access_scope 'all'
+const ENCODER_B_ID = "00000000-0000-4000-9100-000000000014"; // access_scope 'all' — for "can't see A's drafts"
+const VIEWER_ID = "00000000-0000-4000-9100-000000000015";
+const ASSIGNED_ENCODER_ID = "00000000-0000-4000-9100-000000000016"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
+const UNASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000017"; // access_scope 'assigned', zero grants
+
+let assetAccountId: string;
+let liabilityAccountId: string;
+let contactId: string;
+
+async function upsertUser(id: string, email: string, role: string, accessScope: "all" | "assigned") {
+  await ownerDb
+    .insert(schema.users)
+    .values({ id, firmId: FIRM_ID, email, name: email, role: role as any, accessScope })
+    .onConflictDoUpdate({ target: schema.users.id, set: { role: role as any, accessScope } });
+}
+
+beforeAll(async () => {
+  await ownerDb.insert(schema.firms).values({ id: FIRM_ID, name: "RLS Test Firm" }).onConflictDoNothing();
+
+  for (const [id, name] of [
+    [CLIENT_ASSIGNED_ID, "RLS Test Client (Assigned)"],
+    [CLIENT_UNASSIGNED_ID, "RLS Test Client (Unassigned)"],
+  ] as const) {
+    await ownerDb
+      .insert(schema.clients)
+      .values({
+        id,
+        firmId: FIRM_ID,
+        registeredName: name,
+        tin: "000-000-000-00000",
+        rdoCode: "000",
+        taxpayerType: "corporation",
+        vatStatus: "vat",
+        incomeTaxRegime: "rcit",
+        address: "Test address",
+        status: "active",
+      })
+      .onConflictDoNothing();
+  }
+
+  await upsertUser(OWNER_ID, "rls-owner@test.local", "firm_admin", "all");
+  await upsertUser(BOOKKEEPER_ID, "rls-bookkeeper@test.local", "bookkeeper", "all");
+  await upsertUser(REVIEWER_ID, "rls-reviewer@test.local", "reviewer", "all");
+  await upsertUser(ENCODER_A_ID, "rls-encoder-a@test.local", "encoder", "all");
+  await upsertUser(ENCODER_B_ID, "rls-encoder-b@test.local", "encoder", "all");
+  await upsertUser(VIEWER_ID, "rls-viewer@test.local", "viewer", "all");
+  await upsertUser(ASSIGNED_ENCODER_ID, "rls-assigned-encoder@test.local", "encoder", "assigned");
+  await upsertUser(UNASSIGNED_BOOKKEEPER_ID, "rls-unassigned-bookkeeper@test.local", "bookkeeper", "assigned");
+
+  await ownerDb
+    .insert(schema.userClientAssignments)
+    .values({ userId: ASSIGNED_ENCODER_ID, clientId: CLIENT_ASSIGNED_ID })
+    .onConflictDoNothing();
+
+  const existingAccounts = await ownerDb.select().from(schema.accounts).where(eq(schema.accounts.clientId, CLIENT_ASSIGNED_ID));
+  const asset = existingAccounts.find((a) => a.code === "RLS-CASH");
+  const liability = existingAccounts.find((a) => a.code === "RLS-AP");
+  if (asset) {
+    assetAccountId = asset.id;
+  } else {
+    [{ id: assetAccountId }] = await ownerDb
+      .insert(schema.accounts)
+      .values({ clientId: CLIENT_ASSIGNED_ID, code: "RLS-CASH", name: "RLS Test Cash", type: "asset", normalBalance: "debit", fsLineMapping: "current_assets" })
+      .returning({ id: schema.accounts.id });
+  }
+  if (liability) {
+    liabilityAccountId = liability.id;
+  } else {
+    [{ id: liabilityAccountId }] = await ownerDb
+      .insert(schema.accounts)
+      .values({ clientId: CLIENT_ASSIGNED_ID, code: "RLS-AP", name: "RLS Test Payable", type: "liability", normalBalance: "credit", fsLineMapping: "current_liabilities" })
+      .returning({ id: schema.accounts.id });
+  }
+
+  const existingContact = await ownerDb.select().from(schema.contacts).where(eq(schema.contacts.clientId, CLIENT_ASSIGNED_ID)).limit(1);
+  if (existingContact[0]) {
+    contactId = existingContact[0].id;
+  } else {
+    [{ id: contactId }] = await ownerDb
+      .insert(schema.contacts)
+      .values({ clientId: CLIENT_ASSIGNED_ID, registeredName: "RLS Test Contact", type: "supplier" })
+      .returning({ id: schema.contacts.id });
+  }
+});
+
+afterAll(async () => {
+  await ownerConn.end();
+});
+
+/** Inserts a balanced 2-line draft journal entry as `createdBy`, via the owner connection (setup helper, not itself a permission check). */
+async function seedDraftEntry(createdBy: string, clientId = CLIENT_ASSIGNED_ID) {
+  const [entry] = await ownerDb
+    .insert(schema.journalEntries)
+    .values({ clientId, entryDate: "2026-01-15", book: "GJ", description: "RLS fixture entry", status: "draft", createdBy })
+    .returning();
+  await ownerDb.insert(schema.journalLines).values([
+    { entryId: entry.id, lineNo: 1, accountId: assetAccountId, debitCentavos: 10000n, creditCentavos: 0n },
+    { entryId: entry.id, lineNo: 2, accountId: liabilityAccountId, debitCentavos: 0n, creditCentavos: 10000n },
+  ]);
+  return entry.id;
+}
+
+describe("access_scope: client visibility", () => {
+  it("'all' scope sees every client in the firm", async () => {
+    const ids = await withUserContext(ENCODER_A_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
+    const idSet = new Set(ids.map((r) => r.id));
+    expect(idSet.has(CLIENT_ASSIGNED_ID)).toBe(true);
+    expect(idSet.has(CLIENT_UNASSIGNED_ID)).toBe(true);
+  });
+
+  it("'assigned' scope with zero assignments sees no clients at all", async () => {
+    const ids = await withUserContext(UNASSIGNED_BOOKKEEPER_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
+    expect(ids).toHaveLength(0);
+  });
+
+  it("'assigned' scope sees only the explicitly assigned client", async () => {
+    const ids = await withUserContext(ASSIGNED_ENCODER_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
+    expect(ids.map((r) => r.id)).toEqual([CLIENT_ASSIGNED_ID]);
+  });
+
+  it("Owner sees every client in the firm regardless of access_scope", async () => {
+    const ids = await withUserContext(OWNER_ID, (tx) => tx.select({ id: schema.clients.id }).from(schema.clients));
+    expect(ids.map((r) => r.id).sort()).toEqual([CLIENT_ASSIGNED_ID, CLIENT_UNASSIGNED_ID].sort());
+  });
+});
+
+describe("clients: create/edit", () => {
+  it("Bookkeeper CAN create a client (previously blocked — this is the reconciliation fix)", async () => {
+    // No .returning() — same documented workaround lib/data/clients.ts's
+    // createClient() already uses: INSERT ... RETURNING re-checks the
+    // SELECT policy against a snapshot that doesn't yet include this
+    // statement's own uncommitted insert, so Postgres reports a false
+    // WITH CHECK violation even though the row genuinely qualifies.
+    // Generate the id ourselves and confirm via a separate follow-up
+    // SELECT instead, exactly like the real app code does.
+    const newId = crypto.randomUUID();
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.insert(schema.clients).values({
+        id: newId,
+        firmId: FIRM_ID,
+        registeredName: "Bookkeeper-created Co.",
+        tin: "111-111-111-00000",
+        rdoCode: "000",
+        taxpayerType: "corporation",
+        vatStatus: "vat",
+        incomeTaxRegime: "rcit",
+        address: "Test",
+        status: "active",
+      })
+    );
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, newId));
+    expect(row.registeredName).toBe("Bookkeeper-created Co.");
+    await ownerDb.delete(schema.clients).where(eq(schema.clients.id, newId));
+  });
+
+  it("Reviewer CANNOT create a client", async () => {
+    await expect(
+      withUserContext(REVIEWER_ID, (tx) =>
+        tx.insert(schema.clients).values({
+          firmId: FIRM_ID,
+          registeredName: "Should Not Exist Co.",
+          tin: "222-222-222-00000",
+          rdoCode: "000",
+          taxpayerType: "corporation",
+          vatStatus: "vat",
+          incomeTaxRegime: "rcit",
+          address: "Test",
+          status: "active",
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("Encoder CANNOT create a client", async () => {
+    await expect(
+      withUserContext(ENCODER_A_ID, (tx) =>
+        tx.insert(schema.clients).values({
+          firmId: FIRM_ID,
+          registeredName: "Should Not Exist Co. 2",
+          tin: "333-333-333-00000",
+          rdoCode: "000",
+          taxpayerType: "corporation",
+          vatStatus: "vat",
+          incomeTaxRegime: "rcit",
+          address: "Test",
+          status: "active",
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("Viewer CANNOT edit a client", async () => {
+    await expect(
+      withUserContext(VIEWER_ID, (tx) =>
+        tx.update(schema.clients).set({ tradeName: "Hacked" }).where(eq(schema.clients.id, CLIENT_ASSIGNED_ID))
+      ).then(async () => {
+        const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, CLIENT_ASSIGNED_ID));
+        if (row.tradeName === "Hacked") throw new Error("viewer's UPDATE silently succeeded — RLS did not block it");
+      })
+    ).resolves.toBeUndefined(); // UPDATE against 0 matching rows doesn't throw — the assertion above is the real check
+  });
+});
+
+describe("journal_entries: Encoder (add own drafts, edit/delete only own, can't post)", () => {
+  it("CAN insert their own draft entry", async () => {
+    const [entry] = await withUserContext(ENCODER_A_ID, (tx) =>
+      tx
+        .insert(schema.journalEntries)
+        .values({ clientId: CLIENT_ASSIGNED_ID, entryDate: "2026-01-16", book: "GJ", description: "Encoder A draft", status: "draft", createdBy: ENCODER_A_ID })
+        .returning()
+    );
+    expect(entry.status).toBe("draft");
+  });
+
+  it("CANNOT insert an entry attributed to someone else", async () => {
+    await expect(
+      withUserContext(ENCODER_A_ID, (tx) =>
+        tx.insert(schema.journalEntries).values({
+          clientId: CLIENT_ASSIGNED_ID,
+          entryDate: "2026-01-16",
+          book: "GJ",
+          description: "Impersonation attempt",
+          status: "draft",
+          createdBy: ENCODER_B_ID,
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("CANNOT insert a non-draft (pre-posted) entry", async () => {
+    await expect(
+      withUserContext(ENCODER_A_ID, (tx) =>
+        tx.insert(schema.journalEntries).values({
+          clientId: CLIENT_ASSIGNED_ID,
+          entryDate: "2026-01-16",
+          book: "GJ",
+          description: "Skip-the-draft attempt",
+          status: "posted",
+          createdBy: ENCODER_A_ID,
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("CANNOT see another encoder's draft — direct SELECT returns nothing, not an error", async () => {
+    const bId = await seedDraftEntry(ENCODER_B_ID);
+    const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, bId)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("CAN edit and delete their own draft", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    await withUserContext(ENCODER_A_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ description: "Edited by owner-encoder" }).where(eq(schema.journalEntries.id, aId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(after.description).toBe("Edited by owner-encoder");
+
+    await withUserContext(ENCODER_A_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, aId)));
+    const gone = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(gone).toHaveLength(0);
+  });
+
+  it("CANNOT edit another encoder's draft, even though it's a draft", async () => {
+    const bId = await seedDraftEntry(ENCODER_B_ID);
+    await withUserContext(ENCODER_A_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ description: "Should not apply" }).where(eq(schema.journalEntries.id, bId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, bId));
+    expect(after.description).not.toBe("Should not apply");
+  });
+
+  it("CANNOT post their own draft (flip status to posted)", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    // USING matches (it's their own draft — selected for update), but
+    // WITH CHECK rejects the proposed NEW row (status != 'draft'), so
+    // Postgres raises rather than silently affecting 0 rows — that's the
+    // documented distinction between USING (which row) and WITH CHECK
+    // (which new values), and it's still airtight either way.
+    await expect(
+      withUserContext(ENCODER_A_ID, (tx) =>
+        tx.update(schema.journalEntries).set({ status: "posted", postedBy: ENCODER_A_ID, postedAt: new Date() }).where(eq(schema.journalEntries.id, aId))
+      )
+    ).rejects.toThrow();
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(after.status).toBe("draft");
+  });
+});
+
+describe("journal_entries: Reviewer (post/approve only, cannot add or edit)", () => {
+  it("CANNOT insert a new entry", async () => {
+    await expect(
+      withUserContext(REVIEWER_ID, (tx) =>
+        tx.insert(schema.journalEntries).values({
+          clientId: CLIENT_ASSIGNED_ID,
+          entryDate: "2026-01-17",
+          book: "GJ",
+          description: "Reviewer attempting to add",
+          status: "draft",
+          createdBy: REVIEWER_ID,
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("CAN post an existing draft (status-only transition)", async () => {
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await withUserContext(REVIEWER_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ status: "posted", postedBy: REVIEWER_ID, postedAt: new Date() }).where(eq(schema.journalEntries.id, entryId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(after.status).toBe("posted");
+    expect(after.postedBy).toBe(REVIEWER_ID);
+  });
+
+  it("CANNOT edit a draft's other fields (no status change alongside)", async () => {
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await expect(
+      withUserContext(REVIEWER_ID, (tx) => tx.update(schema.journalEntries).set({ description: "Reviewer edit attempt" }).where(eq(schema.journalEntries.id, entryId)))
+    ).rejects.toThrow(); // enforce_reviewer_status_only_update() trigger raises
+  });
+
+  it("CANNOT sneak a description change in alongside a legitimate status change", async () => {
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await expect(
+      withUserContext(REVIEWER_ID, (tx) =>
+        tx
+          .update(schema.journalEntries)
+          .set({ status: "posted", postedBy: REVIEWER_ID, postedAt: new Date(), description: "Sneaked in" })
+          .where(eq(schema.journalEntries.id, entryId))
+      )
+    ).rejects.toThrow();
+  });
+});
+
+describe("journal_entries: Viewer (read-only)", () => {
+  it("CAN select", async () => {
+    const rows = await withUserContext(VIEWER_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.clientId, CLIENT_ASSIGNED_ID)));
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("CANNOT insert", async () => {
+    await expect(
+      withUserContext(VIEWER_ID, (tx) =>
+        tx.insert(schema.journalEntries).values({ clientId: CLIENT_ASSIGNED_ID, entryDate: "2026-01-18", book: "GJ", description: "Viewer attempt", status: "draft", createdBy: VIEWER_ID })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("CANNOT update", async () => {
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await withUserContext(VIEWER_ID, (tx) => tx.update(schema.journalEntries).set({ description: "Viewer edit" }).where(eq(schema.journalEntries.id, entryId)));
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(after.description).not.toBe("Viewer edit");
+  });
+});
+
+describe("journal_entries: Bookkeeper (unchanged — full add/edit/post)", () => {
+  it("CAN insert, edit, and post an entry", async () => {
+    // Not .returning() — see the "Bookkeeper CAN create a client" test's
+    // comment; same false-positive on a self-referential RETURNING check.
+    const entryId = crypto.randomUUID();
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx
+        .insert(schema.journalEntries)
+        .values({ id: entryId, clientId: CLIENT_ASSIGNED_ID, entryDate: "2026-01-19", book: "GJ", description: "Bookkeeper entry", status: "draft", createdBy: BOOKKEEPER_ID })
+    );
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.insert(schema.journalLines).values([
+        { entryId, lineNo: 1, accountId: assetAccountId, debitCentavos: 5000n, creditCentavos: 0n },
+        { entryId, lineNo: 2, accountId: liabilityAccountId, debitCentavos: 0n, creditCentavos: 5000n },
+      ])
+    );
+    await withUserContext(BOOKKEEPER_ID, (tx) => tx.update(schema.journalEntries).set({ description: "Edited" }).where(eq(schema.journalEntries.id, entryId)));
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ status: "posted", postedBy: BOOKKEEPER_ID, postedAt: new Date() }).where(eq(schema.journalEntries.id, entryId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(after.description).toBe("Edited");
+    expect(after.status).toBe("posted");
+  });
+});
+
+describe("sales_invoices: representative sample of the 4 document tables", () => {
+  it("Encoder CANNOT see a sales invoice linked to another encoder's draft", async () => {
+    const entryId = await seedDraftEntry(ENCODER_B_ID);
+    const [invoice] = await ownerDb
+      .insert(schema.salesInvoices)
+      .values({
+        clientId: CLIENT_ASSIGNED_ID,
+        contactId,
+        invoiceNo: "RLS-INV-1",
+        invoiceDate: "2026-01-20",
+        totalCentavos: 10000n,
+        journalEntryId: entryId,
+      })
+      .returning();
+    const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.salesInvoices).where(eq(schema.salesInvoices.id, invoice.id)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("Viewer CAN select but CANNOT insert", async () => {
+    const rows = await withUserContext(VIEWER_ID, (tx) => tx.select().from(schema.salesInvoices).where(eq(schema.salesInvoices.clientId, CLIENT_ASSIGNED_ID)));
+    expect(rows.length).toBeGreaterThan(0);
+
+    await expect(
+      withUserContext(VIEWER_ID, (tx) =>
+        tx.insert(schema.salesInvoices).values({ clientId: CLIENT_ASSIGNED_ID, contactId, invoiceNo: "RLS-INV-2", invoiceDate: "2026-01-20", totalCentavos: 5000n })
+      )
+    ).rejects.toThrow();
+  });
+});
+
+describe("accounts/contacts: structural edits (Owner+Bookkeeper only)", () => {
+  it("Reviewer CANNOT create an account", async () => {
+    await expect(
+      withUserContext(REVIEWER_ID, (tx) =>
+        tx
+          .insert(schema.accounts)
+          .values({ clientId: CLIENT_ASSIGNED_ID, code: "RLS-BLOCKED", name: "Blocked", type: "asset", normalBalance: "debit", fsLineMapping: "current_assets" })
+      )
+    ).rejects.toThrow();
+  });
+
+  it("Encoder CANNOT create a contact", async () => {
+    await expect(
+      withUserContext(ENCODER_A_ID, (tx) => tx.insert(schema.contacts).values({ clientId: CLIENT_ASSIGNED_ID, registeredName: "Blocked Contact", type: "supplier" }))
+    ).rejects.toThrow();
+  });
+});

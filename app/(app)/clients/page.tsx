@@ -29,7 +29,7 @@ export default async function ClientsPage({
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Clients</h1>
-        {user.role === "firm_admin" && (
+        {(user.role === "firm_admin" || user.role === "bookkeeper") && (
           <Link
             href="/clients/new"
             className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"

@@ -108,6 +108,32 @@ async function main() {
       role: "reviewer",
     })
     .returning();
+  // accessScope: "all" set explicitly even though it's the column default
+  // — makes clear these two see every demo client without needing
+  // per-client assignment set up separately, since there's nothing else
+  // in this seed script that would grant it otherwise.
+  const [encoder] = await db
+    .insert(users)
+    .values({
+      id: crypto.randomUUID(),
+      firmId: firm.id,
+      email: "encoder@keepbooks.demo",
+      name: "Ellie Encoder",
+      role: "encoder",
+      accessScope: "all",
+    })
+    .returning();
+  const [viewer] = await db
+    .insert(users)
+    .values({
+      id: crypto.randomUUID(),
+      firmId: firm.id,
+      email: "viewer@keepbooks.demo",
+      name: "Vic Viewer",
+      role: "viewer",
+      accessScope: "all",
+    })
+    .returning();
 
   console.log("Creating demo clients...");
   const [tradingCorp] = await db
@@ -195,6 +221,9 @@ async function main() {
   console.log(`  firm_admin  -> ${admin.email}`);
   console.log(`  bookkeeper  -> ${bookkeeper.email}`);
   console.log(`  reviewer    -> ${reviewer.email}`);
+  console.log(`  encoder     -> ${encoder.email}`);
+  console.log(`  viewer      -> ${viewer.email}`);
+  console.log("\nAll demo accounts (including these two) must be deleted before launch — see DECISIONS.md.");
 
   await client.end();
 }

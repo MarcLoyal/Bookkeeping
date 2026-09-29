@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { requireStaffUser } from "@/lib/auth/current-user";
 import { listAccounts } from "@/lib/data/accounts";
 import { listContacts } from "@/lib/data/contacts";
@@ -25,6 +25,16 @@ export default async function NewTransactionPage({
   const { id, type } = await params;
   if (!TITLES[type]) notFound();
 
+  // Reviewer/viewer can't add anything — RLS backstops this too (no
+  // INSERT policy at all for viewer, no unattributed INSERT for reviewer),
+  // but a role that can never submit this form shouldn't reach it.
+  if (user.role === "reviewer" || user.role === "viewer") redirect(`/clients/${id}/transactions`);
+  // Encoder only has the draft general-journal flow for now — the four
+  // specialized document forms below always post immediately (no draft
+  // path exists for them yet, see createDraftGeneralJournal's doc
+  // comment), which an encoder can never do.
+  if (user.role === "encoder" && type !== "general_journal") redirect(`/clients/${id}/transactions/new/general_journal`);
+
   const [accounts, contacts, vatRateStr] = await Promise.all([
     listAccounts(user.id, id),
     listContacts(user.id, id),
@@ -49,7 +59,9 @@ export default async function NewTransactionPage({
         {type === "cash_disbursement" && (
           <CashForm mode="disbursement" clientId={id} contacts={contacts} accounts={accounts} />
         )}
-        {type === "general_journal" && <GeneralJournalForm clientId={id} accounts={accounts} />}
+        {type === "general_journal" && (
+          <GeneralJournalForm clientId={id} accounts={accounts} mode={user.role === "encoder" ? "draft" : "post"} />
+        )}
       </div>
     </div>
   );

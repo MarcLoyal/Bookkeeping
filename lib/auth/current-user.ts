@@ -5,7 +5,7 @@ import { withUserContext } from "@/db/client";
 import { users } from "@/db/schema";
 import { createSupabaseServerClient } from "./supabase-server";
 
-export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user" | "platform_admin";
+export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user" | "platform_admin" | "encoder" | "viewer";
 
 export type CurrentUser = {
   id: string;
@@ -74,6 +74,27 @@ export async function requireCurrentUser(): Promise<CurrentUser> {
 export async function requireStaffUser(): Promise<CurrentUser> {
   const user = await requireCurrentUser();
   if (user.role === "client_user") redirect("/dashboard");
+  return user;
+}
+
+/**
+ * Gates reports, books, and anything else that shows totals/balances
+ * across more than one person's work — Encoder is explicitly excluded per
+ * Team & Roles' spec ("NO reports, NO dashboard totals, NO balances, NO
+ * exports"). This is a real server-side refusal (redirect before any
+ * query runs), not just a hidden nav link — RLS alone would only make
+ * these views nearly empty for an encoder (their own drafts don't roll up
+ * into anything meaningful), which isn't the same as actually refusing
+ * the request.
+ *
+ * Deliberately built on requireCurrentUser(), not requireStaffUser(): a
+ * handful of these pages (client reports, the general ledger book) are
+ * also how client_user views their own client's reports — this only
+ * excludes Encoder, not every non-staff role.
+ */
+export async function requireReportAccess(): Promise<CurrentUser> {
+  const user = await requireCurrentUser();
+  if (user.role === "encoder") redirect("/dashboard");
   return user;
 }
 

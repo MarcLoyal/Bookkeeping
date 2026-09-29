@@ -15,7 +15,7 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await apiRequireRole(["firm_admin"]);
+  const auth = await apiRequireRole(["firm_admin", "bookkeeper"]);
   if ("response" in auth) return auth.response;
   const { user } = auth;
   if (!user.firmId) {

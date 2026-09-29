@@ -45,7 +45,9 @@ pnpm dev
 ```
 
 Demo logins (password `password123` for all): `admin@keepbooks.demo`
-(firm_admin), `bookkeeper@keepbooks.demo`, `reviewer@keepbooks.demo`.
+(firm_admin/Owner), `bookkeeper@keepbooks.demo`, `reviewer@keepbooks.demo`,
+`encoder@keepbooks.demo`, `viewer@keepbooks.demo`. **All demo accounts must
+be deleted before launch** — see DECISIONS.md.
 
 ## Scripts
 

@@ -50,6 +50,13 @@
       "when": 1790536452019,
       "tag": "0006_conscious_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790607376431,
+      "tag": "0007_chilly_arachne",
+      "breakpoints": true
     }
   ]
 }
