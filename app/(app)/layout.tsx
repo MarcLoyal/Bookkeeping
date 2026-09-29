@@ -155,17 +155,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // (the platform firms table) aren't per-client pages this layout ever
     // wraps, so there's nothing for getRecentClientsForUser() to reflect.
     //
-    // Logged unconditionally (count, not just failures) for the same
-    // reason recordClientView() is (clients/[id]/layout.tsx) — an empty
-    // result and a swallowed error look identical from the outside
-    // otherwise. Caught rather than left to throw: this section failing
-    // to load is not a reason to fail the whole page (same reasoning as
-    // every other best-effort read in this app).
+    // Caught rather than left to throw: this section failing to load is
+    // not a reason to fail the whole page (same reasoning as every other
+    // best-effort read in this app).
     let recentClients: RecentClientRow[] | undefined;
     if (user.role !== "platform_admin") {
       try {
         recentClients = await getRecentClientsForUser(user.id);
-        console.log("[AppLayout] getRecentClientsForUser", { userId: user.id, role: user.role, count: recentClients.length });
       } catch (err) {
         const pgErr = err as { code?: string; message?: string; detail?: string; hint?: string };
         console.error("[AppLayout] getRecentClientsForUser failed", {
