@@ -1,5 +1,8 @@
 import "server-only";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { authDb } from "@/db/authClient";
+import { users } from "@/db/schema";
 import { createFirmForUser } from "./create-firm-for-user";
 import { createSupabaseServerClient } from "./supabase-server";
 
@@ -53,9 +56,25 @@ export async function signUp(input: unknown): Promise<SignupResult> {
   const { data, error } = await supabase.auth.signUp({ email, password });
 
   if (error) {
-    // Supabase's own message for a taken email is already user-appropriate
-    // ("User already registered") — pass it through rather than inventing
-    // a different one.
+    // Supabase's own message for a taken email ("User already registered")
+    // is already user-appropriate when that email genuinely has a firm —
+    // passed through as-is. But the identical message also fires for an
+    // email that only ever got as far as a Google sign-in and never
+    // finished naming a firm (no public.users row at all yet) — the
+    // generic message is a dead end for that person ("already
+    // registered," with no way back in via this form). Give a specific,
+    // actionable message instead: bypasses RLS the same way
+    // createFirmForUser below does, for the same reason — this has to
+    // see across every firm.
+    if (error.message.toLowerCase().includes("already registered") || error.message.toLowerCase().includes("already been registered")) {
+      const [existingProfileRow] = await authDb.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+      if (!existingProfileRow) {
+        return {
+          ok: false,
+          error: "You've already started signing in with this email (e.g. with Google) but haven't finished setting up your firm. Sign in with that same method to pick up where you left off.",
+        };
+      }
+    }
     return { ok: false, error: error.message };
   }
   if (!data.user) {

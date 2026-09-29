@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/current-user";
+import { getCurrentUser, getPendingGoogleSignup } from "@/lib/auth/current-user";
 import { LoginForm } from "./login-form";
 
 export default async function LoginPage({
@@ -10,6 +10,13 @@ export default async function LoginPage({
 }) {
   const user = await getCurrentUser();
   if (user) redirect("/dashboard");
+
+  // A Google identity that authenticated but never finished naming a firm
+  // has a real Supabase session (getCurrentUser() above returns null for
+  // it, since there's no profile row yet) — send them back to resume
+  // instead of showing a login form for someone who's already signed in.
+  const pending = await getPendingGoogleSignup();
+  if (pending) redirect("/onboarding/firm");
 
   const { reset, oauth_error: oauthError } = await searchParams;
 

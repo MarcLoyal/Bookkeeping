@@ -2467,3 +2467,173 @@ by reading it) against both a pooler-style username
 (`postgres.abcdefgh`) and a plain direct-connection username with no
 dot — the fix preserves the suffix in the first case and is a no-op in
 the second, matching what a non-pooled `MIGRATION_DATABASE_URL` needs.
+
+## Inviting an email that already has a Supabase Auth identity but no firm
+
+**The bug**: `createTeamMember()`'s original "already registered" branch
+handled `inviteUserByEmail()` failing (which it always does for an
+email that already has ANY Supabase Auth identity — brand new only)
+by falling back to `listUsers()` to find the existing identity, then
+just inserting the `public.users` row and returning `{ ok: true }` —
+**no email was ever sent in that branch**. Reported live: inviting
+`loyalcreatives@gmail.com` (which had signed in with Google once, with
+no firm yet) as an Encoder silently attached the row and reported
+success, with nothing actually delivered.
+
+**The fix** — `lib/auth/create-team-member.ts` now distinguishes three
+outcomes for an email that already has *some* identity, checked in
+this order:
+
+1. **Already a member of THIS firm** — refused with
+   `"<email> is already a member of this firm (role: X)."`, nothing
+   touched.
+2. **Already belongs to a DIFFERENT firm** — refused with
+   `"<email> already belongs to a different firm. It can't be added
+   here."`, nothing touched. A `platform_admin` row (`firm_id` NULL)
+   gets its own branch here too — never adoptable as a firm member,
+   same generic "already registered" message as before.
+3. **A Supabase Auth identity exists but no `public.users` row
+   anywhere** (this case) — attach them to the firm using their
+   *existing* auth id (no new Supabase Auth user created — reusing the
+   same `listUsers()` lookup the old code already did, just acting on
+   it correctly this time), then call
+   `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser:
+   false, ... } })` to actually send a magic-link sign-in email.
+   `signInWithOtp` was chosen over `inviteUserByEmail` (which only
+   works for brand-new identities and is what failed in the first
+   place) and over `resetPasswordForEmail` (which works for any
+   existing identity too, but is semantically a "reset your password"
+   email — confusing for someone who already has working Google
+   sign-in and isn't resetting anything). It doesn't touch their
+   existing credentials; Google sign-in still works exactly as before
+   afterward, the magic link is just one more way in for this email.
+   Failure to send this courtesy email doesn't roll back the
+   attachment (the part that actually matters already succeeded) —
+   surfaced instead as a non-fatal `warning` in the result, rendered
+   on the Team page in amber, distinct from a green success or a red
+   error. Never silent either way, per the requested safety rules.
+
+A genuinely brand-new email (no auth identity at all) is unaffected —
+still goes through `inviteUserByEmail()` exactly as before.
+
+**On the literal wording** ("You've been added to Firm X as an
+Encoder"): this app has no email-sending infrastructure of its own —
+`lib/email/send.ts` doesn't exist anymore; every transactional email
+this app sends goes through a Supabase Auth email template
+(Invite / Magic Link / Recovery), configured in the Supabase dashboard,
+not in this codebase. `templateData` (`firm_name`, `role_label`,
+`full_name`) is passed to both `inviteUserByEmail()` and
+`signInWithOtp()` calls and is available to whichever template fires
+as `{{ .Data.firm_name }}` / `{{ .Data.role_label }}` — but only if
+that template has been customized to reference them; Supabase's
+default templates don't. To get the exact requested wording, customize
+the **Magic Link** template under Supabase Dashboard → Authentication →
+Email Templates:
+
+```
+Subject: You've been added to {{ .Data.firm_name }}
+
+Body:
+<h2>You've been added to {{ .Data.firm_name }}</h2>
+<p>You've been added as {{ .Data.role_label }}. Click below to sign in:</p>
+<p><a href="{{ .ConfirmationURL }}">Sign in to Keep.Books</a></p>
+```
+
+Consider doing the same for the **Invite** template (same two
+variables, plus `{{ .Data.full_name }}`) for the brand-new-email path,
+for consistency. Until customized, both paths still send a real,
+working sign-in link — just with Supabase's generic default copy.
+
+### The "Create your firm" flow — investigated, two real gaps found
+
+Reported: signing up with Google as `loyalcreatives@gmail.com` never
+created a firm or a `public.users` row. Traced both
+`app/auth/callback/route.ts` → `lib/auth/oauth-callback.ts` (routes a
+firmless Google identity to `/onboarding/firm` — correct) and
+`app/onboarding/firm/actions.ts` → `lib/auth/create-firm-for-user.ts`
+(creates the firm + first user in one transaction — also correct) by
+hand; neither has a bug that would silently swallow a firm creation.
+
+**Most likely actual explanation for this specific email**: it was
+very likely already attached to the tester's own firm by the invite
+bug above (fixed in this same change) — a silent, no-email attach
+followed by a genuine "sign up with Google" attempt would land the
+person straight back into the firm they were already (silently)
+attached to, rather than onboarding a new one, which looks exactly
+like "signing up never created a firm" from the outside. Verifying
+this needs looking at the actual live row, which this sandbox can't
+do — see `scripts/inspect-user-by-email.ts` below.
+
+**Two real, separate gaps found and fixed regardless**, both
+matching the explicit ask to "let a half-finished signup resume":
+
+1. `app/login/page.tsx` and `app/signup/page.tsx` both checked
+   `getCurrentUser()` only — which returns `null` for a Google identity
+   that authenticated but never finished onboarding (by design, since
+   it has no profile row yet — see that function's own doc comment).
+   That meant a person in exactly that pending state, landing back on
+   `/login` or `/signup` (e.g. via the "Create your firm" / "Sign in"
+   links, or a bookmark), saw a fresh, blank form with no
+   acknowledgment they'd already started — not wrong exactly (every
+   *other* protected page already correctly resumed them via
+   `requireCurrentUser()`'s own pending check), but the two most
+   likely re-entry points didn't. Both now also check
+   `getPendingGoogleSignup()` and redirect to `/onboarding/firm`.
+2. `lib/auth/signup.ts`'s email/password path: Supabase's `signUp()`
+   returns the exact same "User already registered" error whether the
+   email is fully onboarded elsewhere or only has a half-finished
+   Google identity with no firm — and the generic message is a dead
+   end for the second case (already flagged in this file's own code
+   comment as "no way yet to resume rather than start over"). Now
+   checks whether a `public.users` row actually exists for that email
+   before deciding which message to show; if not, the error becomes
+   "You've already started signing in with this email (e.g. with
+   Google) but haven't finished setting up your firm. Sign in with
+   that same method to pick up where you left off." instead of the
+   unhelpful generic one.
+
+**New read-only diagnostic**: `scripts/inspect-user-by-email.ts`
+(`pnpm inspect-user -- <email>`) prints everything this app knows
+about one email — its `public.users` row (if any) and its Supabase
+Auth identity (if any) — side by side, with a plain-language diagnosis
+of which state it's in. Makes no changes. Built because every mutation
+script in this repo (`delete-test-signup.ts`,
+`migrate-demo-users-to-supabase-auth.ts`) already assumes you know
+which case you're in before running it, and this incident showed that
+isn't always obvious from the outside.
+
+**Tests**: `db/__tests__/create-team-member.test.ts` (new) covers the
+three "already has some identity" branches directly against real
+Postgres — no Supabase credentials needed, since all three return
+before `createTeamMember()` ever calls the Supabase Admin API. The
+fourth case (attach + `signInWithOtp`) isn't covered by an automated
+test, the same way `lib/auth/invite-platform-admin.ts`'s own Supabase
+Admin API calls aren't — this codebase tests DB-level RLS/data-layer
+boundaries, not Supabase's own SDK behavior against a real project.
+
+**What to run to apply these changes**:
+
+```bash
+# 1. See loyalcreatives@gmail.com's actual current state before retesting
+pnpm inspect-user -- loyalcreatives@gmail.com
+```
+
+If that shows a `public.users` row already attached to your firm as
+Encoder (the likely residue of the original bug) and you want to
+re-test the full flow cleanly, remove just that row yourself (this
+does NOT touch their Supabase Auth identity, so a subsequent Google
+sign-in correctly resumes as "pending" per the fixes above):
+
+```sql
+delete from user_client_assignments where user_id = (select id from users where email = 'loyalcreatives@gmail.com');
+delete from users where email = 'loyalcreatives@gmail.com';
+```
+
+No new SQL migration this round — `users_insert`/`uca_write`'s
+policies already don't care whether an inserted row's id came from a
+brand-new `inviteUserByEmail()` call or a reused existing identity, so
+`pnpm db:migrate` has nothing new to apply. Just redeploy/restart with
+the updated code, then re-run the invite from `/settings/team`.
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 185/185 (181 above + 4
+new), `pnpm build` clean.

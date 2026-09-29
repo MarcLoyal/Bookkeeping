@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addTeamMemberAction, type AddTeamMemberActionState } from "./actions";
 
-const initialState: AddTeamMemberActionState = { error: null, success: false };
+const initialState: AddTeamMemberActionState = { error: null, success: false, warning: null };
 
 const ROLE_OPTIONS: { value: string; label: string }[] = [
   { value: "firm_admin", label: "Owner" },
@@ -119,9 +119,10 @@ export function AddTeamMemberForm({
       )}
 
       {state.error && <p className="text-sm text-red-600">{state.error}</p>}
-      {state.success && (
-        <p className="text-sm text-emerald-700">Invite sent — they&apos;ll get an email to set their password and sign in.</p>
+      {state.success && !state.warning && (
+        <p className="text-sm text-emerald-700">Added — they&apos;ll get an email with a link to sign in.</p>
       )}
+      {state.success && state.warning && <p className="text-sm text-amber-700">{state.warning}</p>}
     </form>
   );
 }

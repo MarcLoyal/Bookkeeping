@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireTeamManageAccess } from "@/lib/auth/current-user";
 import { createTeamMember } from "@/lib/auth/create-team-member";
 
-export type AddTeamMemberActionState = { error: string | null; success: boolean };
+export type AddTeamMemberActionState = { error: string | null; success: boolean; warning: string | null };
 
 export async function addTeamMemberAction(_prevState: AddTeamMemberActionState, formData: FormData): Promise<AddTeamMemberActionState> {
   const currentUser = await requireTeamManageAccess();
@@ -17,9 +17,9 @@ export async function addTeamMemberAction(_prevState: AddTeamMemberActionState, 
   });
 
   if (!result.ok) {
-    return { error: result.error, success: false };
+    return { error: result.error, success: false, warning: null };
   }
 
   revalidatePath("/settings/team");
-  return { error: null, success: true };
+  return { error: null, success: true, warning: result.warning ?? null };
 }

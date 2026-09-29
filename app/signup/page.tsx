@@ -1,11 +1,17 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/current-user";
+import { getCurrentUser, getPendingGoogleSignup } from "@/lib/auth/current-user";
 import { SignupForm } from "./signup-form";
 
 export default async function SignupPage() {
   const user = await getCurrentUser();
   if (user) redirect("/dashboard");
+
+  // Same reasoning as app/login/page.tsx: a Google identity mid-onboarding
+  // has a real session but getCurrentUser() returns null for it — resume
+  // where they left off instead of showing a fresh "create your firm" form.
+  const pending = await getPendingGoogleSignup();
+  if (pending) redirect("/onboarding/firm");
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-50 px-4">
