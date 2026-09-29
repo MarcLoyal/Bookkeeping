@@ -11,6 +11,7 @@
     "db:migrate": "tsx db/migrate.ts",
     "seed": "tsx db/seed.ts",
     "seed-viewer-demo-user": "tsx scripts/seed-viewer-demo-user.ts",
+    "reset-app-role-password": "tsx scripts/reset-app-role-password.ts",
     "migrate-demo-users": "tsx scripts/migrate-demo-users-to-supabase-auth.ts",
     "create-platform-admin": "tsx scripts/create-platform-admin.ts",
     "delete-test-signup": "tsx scripts/delete-test-signup.ts",

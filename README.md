@@ -58,6 +58,7 @@ pnpm start           # production server (build first)
 pnpm lint            # eslint
 pnpm db:generate     # regenerate drizzle-kit migrations after a schema change
 pnpm db:migrate      # apply table migrations, then db/sql/001_functions_triggers_rls.sql
+pnpm reset-app-role-password  # lost/unknown keepbooks_app password — resets it, prints the DATABASE_URL to set
 pnpm seed            # idempotent — re-running is safe, early-exits if already seeded
 pnpm seed-viewer-demo-user  # gap-filler for a project seeded before viewer@keepbooks.demo existed — idempotent
 pnpm test            # fast unit tests (Vitest) — no server, no browser required

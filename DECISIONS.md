@@ -2382,3 +2382,70 @@ select client_id from user_client_assignments
 by this investigation — only the 5 new tests, which pass against the
 existing policies and serve as a standing regression guard for both
 boundaries regardless of what the live-project diagnosis turns up.
+
+### Follow-up: DATABASE_URL was missing locally, closing the loop
+
+The user's `.env.local` had `MIGRATION_DATABASE_URL` but no
+`DATABASE_URL` at all — yet `.env.preview-check` (a hosting-provider
+generated file, not part of this repo) already showed a `DATABASE_URL`
+value they never set themselves. `db/client.ts` already throws
+immediately if `process.env.DATABASE_URL` is falsy — there is no
+code-level fallback to any other connection anywhere in the app (only
+place `DATABASE_URL`, unprefixed, is read at all). So a local
+`pnpm dev` run with it genuinely absent should crash outright on the
+first request touching the database, not silently show wrong-but-
+plausible data.
+
+Given that, and that a `DATABASE_URL` already existed somewhere the
+user hadn't set it, the most likely explanation for the whole
+platform_admin/all-clients symptom pair above is a hosting platform
+auto-injecting its own `DATABASE_URL` (commonly done by a linked
+Postgres/Supabase integration) independently of the project's own env
+files or dashboard settings — and that auto-injected value being
+Supabase's default `postgres` connection (table owner, bypasses plain
+`ENABLE ROW LEVEL SECURITY`), not the dedicated `keepbooks_app` role
+this app's own RLS design depends on. This can't be confirmed from
+inside this sandbox — it requires checking the actual hosting
+provider's environment variable settings and/or querying the deployed
+app's real `DATABASE_URL` directly (`select current_user;`).
+
+Three changes:
+
+1. **`next.config.ts`** now throws if `DATABASE_URL` is unset, at
+   config-evaluation time — before `next dev`/`next build`/`next start`
+   do anything, not just lazily on the first request that happens to
+   import `db/client.ts`. Verified live: `next build` with
+   `DATABASE_URL` unset fails immediately with a clear error; with it
+   set, the build succeeds unchanged. Deliberately scoped to
+   `DATABASE_URL` only, not a general env validator — and deliberately
+   NOT a fix for the actual live symptom (an auto-injected,
+   wrong-but-present `DATABASE_URL` still passes this check; a presence
+   check can only catch "missing," not "wrong role") — it exists so a
+   genuinely missing `DATABASE_URL` (this environment's actual state)
+   fails loudly instead of looking like a data bug.
+2. **`scripts/reset-app-role-password.ts`** (new): `keepbooks_app`'s
+   password is only ever printed once, at role-creation time, by
+   `db:migrate`'s `ensureAppRole()` — a pre-existing role's password is
+   deliberately left untouched (and thus unprintable) on every later
+   run. Since the role already exists on the user's project from PR
+   A's own testing, there was no way to recover the original password;
+   this resets it via `MIGRATION_DATABASE_URL` (same privilege level
+   `ensureAppRole()` already uses for `CREATE ROLE`) and prints the
+   `DATABASE_URL` to set, built by copying `MIGRATION_DATABASE_URL`'s
+   host/port/database/query-string and swapping in `keepbooks_app` +
+   the new password — so pooler-specific settings (`sslmode`, pgbouncer
+   params, etc.) carry over exactly rather than being retyped by hand.
+   Not run live in this sandbox: altering a role's password was denied
+   by the environment's own permission classifier as a secret-store
+   write, even against this sandbox's own disposable local Postgres —
+   verified by code review and `tsc` instead, mirroring
+   `db/migrate.ts`'s own already-proven `ensureAppRole()` URL-
+   construction logic closely enough that I'm confident in it, but this
+   is the one piece of this follow-up the user should watch run for the
+   first time.
+
+**Verified**: `tsc --noEmit` clean, `pnpm build` clean (both with
+`DATABASE_URL` set, matching this sandbox's own `.env.local`), and a
+direct `next build` run with `DATABASE_URL` forced empty confirmed the
+new check fails loudly as intended. `pnpm test` unaffected (181/181) —
+neither change touches anything the test suite exercises.
