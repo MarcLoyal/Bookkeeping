@@ -3236,3 +3236,76 @@ against a database already carrying everything through PR #28/#29.
 `tsc --noEmit` and `pnpm build` both clean. `pnpm test`: 232/232 (224
 above + 8 new). UI not manually driven in a browser in this
 environment, same limitation as every prior PR in this session.
+
+## Follow-up: keepbooks_app couldn't write to user_client_views at all on the real project
+
+Reported live after deploying the above: the sidebar's Recent Clients
+section never appeared for any role, and `select * from
+user_client_views` on the real Supabase project came back empty —
+zero rows, ever, despite navigating clients repeatedly. This is a
+straightforward grant gap, and a genuinely useful catch: it means the
+implicit-grant assumption this app has been making since
+`002_password_reset.sql` (new tables inherit `keepbooks_app`'s
+privileges from `001_functions_triggers_rls.sql`'s `ALTER DEFAULT
+PRIVILEGES`, no explicit `GRANT` needed) had never actually been
+round-trip tested against a real Supabase project before now —
+`user_client_views` is the first *new table* this app has shipped
+that a real user's real traffic touched immediately after deploy. The
+exact reason the implicit grant didn't apply here wasn't fully
+isolated (a real Supabase project can have more than one Postgres
+role in play across the dashboard SQL editor, a pooled connection,
+and a migration script — `ALTER DEFAULT PRIVILEGES` only ever binds
+to the one role that ran it, and confirming which role that actually
+was on this specific project isn't something reachable from this
+sandbox) — rather than keep chasing it, the fix is unconditional.
+
+- `db/sql/016_user_client_views_grant.sql`: an explicit `GRANT
+  SELECT, INSERT, UPDATE, DELETE ON user_client_views TO
+  keepbooks_app`. New file, not an edit to 015 — 015 was already
+  applied (and tracked in `_sql_migrations_applied`) on the real
+  project by the time this was reported, so editing it in place would
+  never have re-run there; `db:migrate`'s per-file tracking is exactly
+  why a fix has to land as a new file (same reasoning as every other
+  `_sql_migrations_applied`-tracked file in this app). Verified
+  locally by deliberately `REVOKE`ing the grant, confirming the exact
+  failure mode reproduces (`permission denied for table
+  user_client_views`, Postgres code `42501`), then confirming the new
+  migration file fixes it.
+- Left `002_password_reset.sql`'s table alone — no live evidence it's
+  actually broken, and it's an already-applied file everywhere, so
+  editing it wouldn't help even if it were. Worth keeping in mind as
+  the same theoretical gap if it's ever reported.
+
+**Why this was invisible without the user going and querying the
+table directly**: `recordClientView()`'s caller
+(`app/(app)/clients/[id]/layout.tsx`) deliberately treats it as
+best-effort — a `try/catch` around a metadata write that must never
+turn a page that otherwise loaded fine into a 500. That's still the
+right call (an Insert failing here is not the user's problem), but
+the `catch` was only doing a bare `console.error(err)` — real
+information, but sitting in a server log nobody was positioned to go
+read. Per the request to log or surface rather than swallow: the
+catch now logs a structured, greppable record — `code`/`message`/
+`detail`/`hint` (the actual fields a postgres.js error carries, not
+just `.message`) alongside the `userId`/`clientId` that failed —
+still never rethrown, still never blocking the page, but now an
+actual diagnosis if it happens again for any other reason.
+
+**New diagnostic**: `scripts/inspect-user-client-views-access.ts`
+(`pnpm inspect-user-client-views-access -- <email>`) — since this
+sandbox has no credentials for the real Supabase project and can't
+reproduce a live-project-only bug directly, this script lets the
+person who *does* have those credentials do it themselves in one
+command: reports the table's existence/RLS/policies/grants via
+`MIGRATION_DATABASE_URL`, then attempts one real `INSERT` through
+`DATABASE_URL` exactly the way `recordClientView()` does it (same
+`set_config('app.current_user_id', ...)` call `withUserContext()`
+uses), printing the exact Postgres error if it fails. Verified
+locally both ways — passes cleanly against a correctly-granted table,
+and correctly surfaces `42501 permission denied` when the grant is
+deliberately revoked first.
+
+**Verified**: the local repro above (revoke → reproduce → re-grant →
+confirm clean) is the actual proof this fix works, not just that it
+applies without SQL errors. `pnpm test` 232/232, `tsc --noEmit` and
+`pnpm build` both clean.

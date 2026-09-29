@@ -41,10 +41,26 @@ export default async function ClientLayout({
   // metadata (see getRecentClientsForUser()), not something any page's
   // correctness depends on. `user` is guaranteed defined here — `client`
   // only resolved because `getClient(user.id, id)` was called above.
+  //
+  // Logged with a distinct, greppable prefix and every field a postgres.js
+  // error actually carries (code/detail/hint, not just .message) — a
+  // missing GRANT or a rejected RLS check both throw here, and "swallowed
+  // silently" is exactly what made the real-project version of this bug
+  // (016_user_client_views_grant.sql) invisible until someone went and
+  // queried the table directly. Still never rethrown: a page that
+  // otherwise loaded fine shouldn't 500 over navigation-history metadata.
   try {
     await recordClientView(user!.id, id);
   } catch (err) {
-    console.error("recordClientView failed:", err);
+    const pgErr = err as { code?: string; detail?: string; hint?: string; message?: string };
+    console.error("[recordClientView] failed to record a client view", {
+      userId: user!.id,
+      clientId: id,
+      code: pgErr?.code,
+      message: pgErr?.message,
+      detail: pgErr?.detail,
+      hint: pgErr?.hint,
+    });
   }
 
   // Encoder's only legitimate pages under a client are the draft-entry

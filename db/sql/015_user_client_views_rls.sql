@@ -24,9 +24,20 @@
 -- confirmed access, but it costs nothing to also enforce it here rather
 -- than trusting the caller.
 --
--- No explicit GRANT here — 001_functions_triggers_rls.sql's
--- ALTER DEFAULT PRIVILEGES already covers every table created afterward
--- (same reason 002_password_reset.sql needed none for its own new table).
+-- No explicit GRANT here originally — reasoned that
+-- 001_functions_triggers_rls.sql's ALTER DEFAULT PRIVILEGES would cover any
+-- table created afterward (same reasoning 002_password_reset.sql relied on
+-- for its own new table). Reported live: on the real Supabase project,
+-- keepbooks_app got zero rows written to this table at all — no error
+-- visible to the app (INSERT failing on a missing GRANT raises before RLS
+-- is even evaluated, and the app's own try/catch around the best-effort
+-- write was swallowing it). Root cause not fully isolated (multiple
+-- Postgres roles/connection paths on a real Supabase project can make
+-- "which role actually owns the default-privilege rule" less certain than
+-- on a single local dev database, where this table's own RLS/grant tests
+-- passed without issue) — rather than chase it further, 016_user_client_
+-- views_grant.sql adds the explicit GRANT directly, which fixes it
+-- regardless of the exact reason the implicit one didn't apply.
 -- ============================================================================
 
 ALTER TABLE user_client_views ENABLE ROW LEVEL SECURITY;
