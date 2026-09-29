@@ -49,8 +49,14 @@ export default async function ClientLayout({
   // (016_user_client_views_grant.sql) invisible until someone went and
   // queried the table directly. Still never rethrown: a page that
   // otherwise loaded fine shouldn't 500 over navigation-history metadata.
+  // Logs unconditionally, not just on failure: the only way to tell "this
+  // code never ran" (stale deploy, a route not actually going through this
+  // layout, etc.) apart from "it ran and failed silently" from the outside
+  // is to have a log line for the attempt itself, not just the catch.
+  console.log("[ClientLayout] recording client view", { userId: user!.id, clientId: id });
   try {
     await recordClientView(user!.id, id);
+    console.log("[ClientLayout] client view recorded", { userId: user!.id, clientId: id });
   } catch (err) {
     const pgErr = err as { code?: string; detail?: string; hint?: string; message?: string };
     console.error("[recordClientView] failed to record a client view", {
