@@ -4,6 +4,7 @@ import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getJournalEntry } from "@/lib/data/journal";
 import { formatCentavos } from "@/lib/money";
 import { ReverseForm } from "./reverse-form";
+import { DraftActions } from "./draft-actions";
 
 const BOOK_LABELS: Record<string, string> = {
   GJ: "General Journal",
@@ -25,6 +26,17 @@ export default async function EntryDetailPage({
 
   const totalDebit = entry.lines.reduce((s, l) => s + l.debitCentavos, 0n);
   const totalCredit = entry.lines.reduce((s, l) => s + l.creditCentavos, 0n);
+
+  // Delete: firm_admin/bookkeeper on any draft, or the creator themselves
+  // (matches journal_entries_delete in 009_team_roles_rls.sql). Edit is the
+  // same set further narrowed to General Journal — the only book with a
+  // real draft-editing form (see the edit page's own doc comment); a draft
+  // on any other book only ever gets there through direct DB manipulation
+  // (no UI creates one), so Delete alone is enough to clean one up.
+  const canManageDraft =
+    entry.status === "draft" &&
+    (user.role === "firm_admin" || user.role === "bookkeeper" || (user.role === "encoder" && entry.createdBy === user.id));
+  const canEdit = canManageDraft && entry.book === "GJ";
 
   return (
     <div>
@@ -86,6 +98,11 @@ export default async function EntryDetailPage({
         </table>
       </div>
 
+      {canManageDraft && (
+        <div className="mt-4">
+          <DraftActions clientId={id} entryId={entry.id} canEdit={canEdit} />
+        </div>
+      )}
       {entry.status === "posted" && user.role !== "client_user" && (
         <div className="mt-4">
           <ReverseForm clientId={id} entryId={entry.id} />

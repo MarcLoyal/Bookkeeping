@@ -15,20 +15,29 @@ export function GeneralJournalForm({
   clientId,
   accounts,
   mode = "post",
+  entryId,
+  initialValues,
 }: {
   clientId: string;
   accounts: Account[];
-  /** "draft" saves without posting (Encoder's only entry path — they can't post) and returns to their own drafts list instead of the client's transaction ledger. */
-  mode?: "post" | "draft";
+  /** "draft" saves without posting (Encoder's only entry path — they can't post) and returns to their own drafts list instead of the client's transaction ledger. "edit" resubmits an existing draft in place (requires entryId + initialValues) and returns to that entry's detail page instead of the list. */
+  mode?: "post" | "draft" | "edit";
+  /** Required for mode "edit" — the draft being edited. */
+  entryId?: string;
+  /** Required for mode "edit" — prefills the form with the draft's current values. */
+  initialValues?: { entryDate: string; description: string; referenceNo: string; lines: Row[] };
 }) {
+  const editUrl = entryId ? `/api/clients/${clientId}/transactions/${entryId}/edit` : "";
   const { submit, error, pending } = useJsonPost<Record<string, unknown>>(
-    `/api/clients/${clientId}/transactions/${mode === "draft" ? "draft-journal" : "general-journal"}`,
-    () => (mode === "draft" ? "/dashboard" : `/clients/${clientId}/transactions`)
+    mode === "edit" ? editUrl : `/api/clients/${clientId}/transactions/${mode === "draft" ? "draft-journal" : "general-journal"}`,
+    () => (mode === "draft" ? "/dashboard" : mode === "edit" ? `/clients/${clientId}/transactions/${entryId}` : `/clients/${clientId}/transactions`)
   );
-  const [rows, setRows] = useState<Row[]>([
-    { accountCode: "", debit: "", credit: "", memo: "" },
-    { accountCode: "", debit: "", credit: "", memo: "" },
-  ]);
+  const [rows, setRows] = useState<Row[]>(
+    initialValues?.lines ?? [
+      { accountCode: "", debit: "", credit: "", memo: "" },
+      { accountCode: "", debit: "", credit: "", memo: "" },
+    ]
+  );
 
   const { totalDebit, totalCredit } = useMemo(() => {
     let d = 0;
@@ -60,6 +69,22 @@ export function GeneralJournalForm({
     const lines = rows
       .filter((r) => r.accountCode)
       .map((r) => ({ accountCode: r.accountCode, debit: r.debit, credit: r.credit, memo: r.memo || undefined }));
+
+    // Non-blocking: an account debited on one line and credited on another
+    // within the SAME entry is almost always a typo (picked the wrong row's
+    // account, or meant to net two lines together instead of leaving both),
+    // so this asks rather than silently accepting it. Checked against
+    // `rows`, not the resolved `lines` above — same data, but avoids
+    // re-deriving which side each entry landed on from strings twice.
+    const debitedAccounts = new Set(rows.filter((r) => r.accountCode && Number(r.debit) > 0).map((r) => r.accountCode));
+    const creditedAccounts = new Set(rows.filter((r) => r.accountCode && Number(r.credit) > 0).map((r) => r.accountCode));
+    const onBothSides = [...debitedAccounts].filter((code) => creditedAccounts.has(code));
+    if (onBothSides.length > 0) {
+      const proceed = window.confirm(
+        `Account ${onBothSides.join(", ")} appears on both the debit and credit side of this entry — that's unusual. Save anyway?`
+      );
+      if (!proceed) return;
+    }
 
     // Non-blocking: only warns when a reference number is given (see
     // findPossibleDuplicateGeneralJournalEntry's own doc comment for why),
@@ -95,15 +120,15 @@ export function GeneralJournalForm({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className={labelClass}>Date</label>
-          <input type="date" name="entryDate" required className={inputClass} />
+          <input type="date" name="entryDate" required defaultValue={initialValues?.entryDate} className={inputClass} />
         </div>
         <div>
           <label className={labelClass}>Reference No. (optional)</label>
-          <input name="referenceNo" className={inputClass} />
+          <input name="referenceNo" defaultValue={initialValues?.referenceNo} className={inputClass} />
         </div>
         <div className="sm:col-span-2">
           <label className={labelClass}>Description</label>
-          <input name="description" required className={inputClass} />
+          <input name="description" required defaultValue={initialValues?.description} className={inputClass} />
         </div>
       </div>
 
@@ -179,7 +204,15 @@ export function GeneralJournalForm({
         disabled={pending || !balanced}
         className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
       >
-        {pending ? (mode === "draft" ? "Saving..." : "Posting...") : mode === "draft" ? "Save Draft" : "Post Journal Entry"}
+        {pending
+          ? mode === "draft" || mode === "edit"
+            ? "Saving..."
+            : "Posting..."
+          : mode === "draft"
+            ? "Save Draft"
+            : mode === "edit"
+              ? "Save Changes"
+              : "Post Journal Entry"}
       </button>
     </form>
   );

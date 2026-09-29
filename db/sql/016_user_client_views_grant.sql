@@ -1,0 +1,23 @@
+-- ============================================================================
+-- 016_user_client_views_grant.sql
+--
+-- Explicit GRANT for user_client_views, closing a live gap: on the real
+-- Supabase project, keepbooks_app could not write to this table at all —
+-- zero rows, no error visible anywhere in the app (a missing table-level
+-- GRANT makes Postgres reject the INSERT before RLS is even evaluated,
+-- and recordClientView()'s caller wraps it in a best-effort try/catch that
+-- was only logging to a server console nobody was watching). 015's own
+-- comment originally reasoned this table would inherit its grants from
+-- 001_functions_triggers_rls.sql's ALTER DEFAULT PRIVILEGES, the same way
+-- 002_password_reset.sql's table does — that clearly didn't hold on this
+-- real project, whatever the exact reason (a real Supabase project can
+-- have more than one Postgres role in play across the dashboard SQL
+-- editor / pooled connection / migration script, and ALTER DEFAULT
+-- PRIVILEGES only ever applies to the one role that ran it).
+--
+-- Explicit beats implicit here — this is a one-line, harmless-if-redundant
+-- fix that removes the guesswork entirely, rather than a second attempt at
+-- diagnosing which role's default-privilege rule was supposed to apply.
+-- ============================================================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON user_client_views TO keepbooks_app;

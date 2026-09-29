@@ -15,6 +15,7 @@ import {
 import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
 import { EncoderClientPicker } from "./encoder-client-picker";
+import { EncoderTransactionsPicker } from "./encoder-transactions-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
 import { OverviewSparklineCard } from "./overview-sparkline-card";
@@ -122,22 +123,26 @@ export default async function DashboardPage() {
   // server-side everywhere else (reports, the firm dashboard's own stat
   // row), but this branch just never calls that data in the first place.
   //
-  // `listFirmDrafts(user.id)` needs no createdBy filter here — RLS's
-  // journal_entries_select policy already restricts an encoder session to
-  // only their own entries (009_team_roles_rls.sql), so this genuinely is
-  // "my drafts," not "the firm's drafts," for this role specifically.
-  // Editing/deleting an existing draft has full RLS support (verified in
-  // db/__tests__/team-roles-rls.test.ts) but no UI yet — "add-entry
-  // button" was the spec's own bar for this minimal page; that's a
-  // contained follow-up, not a gap in what's enforced.
+  // `listFirmDrafts(user.id)` needs no createdBy filter here — every draft
+  // on a client this Encoder can access, not just their own, which is what
+  // this page's title actually shows since 014_encoder_read_all_client_
+  // entries.sql widened Encoder's read scope past "only entries I created."
+  // Editing/deleting an existing draft has full UI now (the entry detail
+  // page's Edit/Delete, RLS-backed exactly as tested in
+  // db/__tests__/team-roles-rls.test.ts) — reached via a draft's own link
+  // below, not duplicated on this page.
   if (user.role === "encoder") {
     const [drafts, clientRows] = await Promise.all([listFirmDrafts(user.id), listClients(user.id)]);
+    const clientOptions = clientRows.map((c) => ({ id: c.id, registeredName: c.registeredName }));
 
     return (
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold tracking-tight">My Drafts</h1>
-          <EncoderClientPicker clients={clientRows.map((c) => ({ id: c.id, registeredName: c.registeredName }))} />
+          <div className="flex flex-wrap items-center gap-2">
+            <EncoderTransactionsPicker clients={clientOptions} />
+            <EncoderClientPicker clients={clientOptions} />
+          </div>
         </div>
 
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">

@@ -431,6 +431,16 @@ describe("journal_entries: Encoder (add own drafts, edit/delete only own, can't 
     expect(after.description).not.toBe("Should not apply");
   });
 
+  it("CANNOT delete another encoder's draft, even though it's a draft", async () => {
+    const bId = await seedDraftEntry(ENCODER_B_ID);
+    // UPDATE against 0 matching rows doesn't throw — same DELETE-affects-
+    // zero-rows shape as the Viewer "CANNOT edit" test above, so the real
+    // check is that the row is still there afterward, not that this rejects.
+    await withUserContext(ENCODER_A_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, bId)));
+    const [stillThere] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, bId));
+    expect(stillThere).toBeDefined();
+  });
+
   it("CANNOT post their own draft (flip status to posted)", async () => {
     const aId = await seedDraftEntry(ENCODER_A_ID);
     // USING matches (it's their own draft — selected for update), but
@@ -558,6 +568,16 @@ describe("journal_entries: Reviewer (post/approve only, cannot add or edit)", ()
       )
     ).rejects.toThrow();
   });
+
+  it("CANNOT delete a draft", async () => {
+    // No journal_entries_delete branch names 'reviewer' at all, so this
+    // affects 0 rows rather than throwing — same shape as Viewer's
+    // "CANNOT edit" test below.
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await withUserContext(REVIEWER_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, entryId)));
+    const [stillThere] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(stillThere).toBeDefined();
+  });
 });
 
 describe("journal_entries: Viewer (read-only)", () => {
@@ -579,6 +599,13 @@ describe("journal_entries: Viewer (read-only)", () => {
     await withUserContext(VIEWER_ID, (tx) => tx.update(schema.journalEntries).set({ description: "Viewer edit" }).where(eq(schema.journalEntries.id, entryId)));
     const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
     expect(after.description).not.toBe("Viewer edit");
+  });
+
+  it("CANNOT delete a draft", async () => {
+    const entryId = await seedDraftEntry(BOOKKEEPER_ID);
+    await withUserContext(VIEWER_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, entryId)));
+    const [stillThere] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(stillThere).toBeDefined();
   });
 });
 
@@ -605,6 +632,47 @@ describe("journal_entries: Bookkeeper (unchanged — full add/edit/post)", () =>
     const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
     expect(after.description).toBe("Edited");
     expect(after.status).toBe("posted");
+  });
+});
+
+// The entry detail page's Edit/Delete buttons are the first UI to let
+// firm_admin/bookkeeper touch a draft they didn't create themselves — every
+// prior edit/delete test above (Encoder, Bookkeeper) only ever proved a
+// role managing its OWN entry. journal_entries_update/_delete's USING
+// clauses put no created_by condition on firm_admin/bookkeeper at all
+// (009_team_roles_rls.sql), so this should already work; this closes the
+// gap in what's actually been proven, not a gap in what's enforced.
+describe("journal_entries: Owner/Bookkeeper CAN edit and delete an Encoder's draft (not just their own)", () => {
+  it("Owner (firm_admin) CAN edit an Encoder's draft", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    await withUserContext(OWNER_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ description: "Edited by Owner" }).where(eq(schema.journalEntries.id, aId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(after.description).toBe("Edited by Owner");
+  });
+
+  it("Owner (firm_admin) CAN delete an Encoder's draft", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    await withUserContext(OWNER_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, aId)));
+    const gone = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(gone).toHaveLength(0);
+  });
+
+  it("Bookkeeper CAN edit an Encoder's draft", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ description: "Edited by Bookkeeper" }).where(eq(schema.journalEntries.id, aId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(after.description).toBe("Edited by Bookkeeper");
+  });
+
+  it("Bookkeeper CAN delete an Encoder's draft", async () => {
+    const aId = await seedDraftEntry(ENCODER_A_ID);
+    await withUserContext(BOOKKEEPER_ID, (tx) => tx.delete(schema.journalEntries).where(eq(schema.journalEntries.id, aId)));
+    const gone = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
+    expect(gone).toHaveLength(0);
   });
 });
 

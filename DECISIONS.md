@@ -2973,3 +2973,389 @@ under the new migration's block rather than adding net-new coverage),
 `pnpm build` clean (confirmed the new `check-duplicate` route is in
 the build output). UI not manually driven in a browser in this
 environment, same limitation as noted above.
+
+## Draft Edit/Delete, Encoder navigation, same-account warning
+
+New PR (`claude/draft-edit-encoder-nav`, branched from `main` after
+#28 and #29 both merged), per the standing instruction to give each
+new feature its own PR from here on. Four independent asks; taken in
+order.
+
+### 1. Edit/Delete for drafts
+
+**No new RLS needed — verified the permission model was already
+complete, then wrote tests proving it**, rather than assuming a gap
+existed. `journal_entries_update`/`_delete` and `journal_lines_write`
+(`009_team_roles_rls.sql`) already put no `created_by` condition on
+`firm_admin`/`bookkeeper` at all — they can touch any draft, any
+client they can access. Encoder is scoped to `created_by = self`.
+Reviewer's `UPDATE` access exists at the RLS layer but
+`enforce_reviewer_status_only_update()` restricts it to the
+`status`/`posted_by`/`posted_at` columns only — post/approve, not
+edit — so Reviewer correctly gets no Edit button at all. Nobody but
+`firm_admin`/`bookkeeper`/the creating Encoder has a `journal_entries_
+delete` policy branch, so Delete is exactly as scoped. "Posted entries
+stay locked" was already unconditional-on-role, DB-level, and
+untouched by this PR: `enforce_journal_entry_immutability()` /
+`enforce_journal_line_immutability()` (`001_functions_triggers_rls.sql`)
+reject any UPDATE/DELETE on a posted/reversed row outright, before RLS
+role logic even matters.
+
+- `lib/data/post-transaction.ts`: `updateDraftGeneralJournal()`
+  (clear-and-replace on the entry's fields and lines — not a diff;
+  unlike `userClientAssignments`' add/remove diffing, whoever can open
+  this form already sees every one of this draft's own lines, so
+  there's no invisible-row risk) and `deleteJournalEntry()` (a plain
+  `DELETE`; lines cascade via their own FK, itself still RLS-checked
+  per row — the existing "CAN edit and delete their own draft" test
+  already proved this cascade works under RLS, not just under a
+  schema-owner connection).
+- `lib/data/journal.ts`: `EntryWithLines` gained a `createdBy` field
+  (previously only `enteredByName`, the resolved display name) —
+  needed server-side to decide whether *this* Encoder is the creator,
+  without shipping every viewer's raw user id to the client for roles
+  that don't need it.
+- New routes, both `POST` (matching every other mutation in this app —
+  see `lib/use-json-post.ts`'s own doc comment for why Route Handlers,
+  not Server Actions, and why not PATCH/DELETE-as-HTTP-verb):
+  `.../[entryId]/edit` (General Journal only — see below) and
+  `.../[entryId]/delete` (any book). Both re-check role + draft status
+  + creator-match themselves before ever calling the data layer, for a
+  clean error message — RLS is the actual backstop regardless, proven
+  by `edit-delete-draft.test.ts` calling the data-layer functions
+  directly (no route, no role pre-check) and getting the exact same
+  rejections.
+- **Edit is General-Journal-only, Delete is not.** Edit reuses
+  `GeneralJournalForm` (new `mode: "edit"` + `initialValues` props) —
+  the only book with a real draft-*editing* form, since it's the only
+  book with a real draft-*creation* form
+  (`createDraftGeneralJournal`'s own doc comment: the four specialized
+  document types have RLS support for an encoder-authored draft but no
+  UI that ever produces one). A draft on any other book only exists
+  through direct DB manipulation, so there's no form to reuse for it —
+  Delete alone is enough to clean one up, and the entry detail page
+  only shows Edit when `book === "GJ"`.
+- Entry detail page: new `draft-actions.tsx` client component (Edit
+  link + Delete button with a confirm), rendered only when the
+  server-computed `canManageDraft` is true — the same three-part
+  condition (`status === "draft"` AND (`firm_admin`/`bookkeeper` OR
+  creator)) the API routes re-check, kept in one place in the page
+  component rather than duplicated per-button.
+- **Tests**: new `db/__tests__/edit-delete-draft.test.ts` (8 tests) —
+  calls `updateDraftGeneralJournal()`/`deleteJournalEntry()` directly
+  (own fixture firm, not the shared `team-roles-rls.test.ts` fixtures)
+  to prove the actual exported functions behave correctly: creator
+  edits own draft (fields + lines both replaced), `firm_admin` edits
+  *someone else's* draft, an Encoder editing another Encoder's draft
+  is rejected (a genuine `throw`, not a silent no-op — see below),
+  same four shapes for delete, plus both functions rejecting outright
+  against a posted entry. Also added to `team-roles-rls.test.ts`
+  directly against `journal_entries`/`journal_lines`: Encoder-cannot-
+  delete-another's-draft (silent no-op, matching the existing
+  cannot-edit test's shape), Reviewer/Viewer-cannot-delete-a-draft-at-
+  all, and — the one genuinely new permission boundary this PR's UI
+  exercises for the first time — `firm_admin`/`bookkeeper` editing
+  *and* deleting an Encoder's draft (every prior edit/delete test only
+  ever proved a role managing its own entry).
+- **One real surprise, caught by the tests**: an Encoder editing
+  another Encoder's draft doesn't fail the same way for UPDATE and
+  DELETE. `DELETE`/`UPDATE`'s `USING` clause excludes the row, so
+  Postgres just affects 0 rows — silent, no error. But
+  `updateDraftGeneralJournal()`'s line-replace does a `DELETE` (0 rows,
+  silent) *then* an `INSERT` of the new lines — and `INSERT` has no
+  "0 matching rows" fallback; `WITH CHECK` rejects the new row outright
+  with a hard `new row violates row-level security policy` error. Both
+  are correctly blocked, but one throws and one doesn't — the app-layer
+  pre-check in the edit route means a real user never sees the raw
+  Postgres error either way, but the test needed to expect a `throw`
+  here specifically, not the no-op shape used everywhere else in this
+  file.
+
+### 2. Encoder navigation: Recent clients + a transactions picker
+
+Both surfaced in `dashboard/page.tsx`'s own doc comment as a flagged,
+deliberate follow-up ("Editing/deleting an existing draft has full RLS
+support... but no UI yet" — now built above; and the page's title,
+"My Drafts," predates `014_encoder_read_all_client_entries.sql`
+widening what an Encoder can even see there).
+
+- `lib/data/dashboard.ts`: `getRecentClientsForEncoder(userId, limit)`
+  — up to 5 clients, ordered by `MAX(journal_entries.created_at)`,
+  filtered to `created_by = userId` specifically (not just "clients
+  visible to me," which after the read-scope widening above would
+  include clients this Encoder has never personally entered anything
+  for). Assigned-only falls out of RLS itself, not an extra filter
+  here — `access_scope` is always `'assigned'` for this role
+  (`013_role_access_scope_check.sql`), so `app_accessible_client_ids()`
+  already excludes anything unassigned.
+- `app/(app)/layout.tsx`: `SidebarShell` takes an optional
+  `recentClients` prop, rendered as a small section below the nav
+  items, only for the Encoder role (`AppLayout` fetches it
+  conditionally). Every other role passes nothing and the section just
+  doesn't render — no layout change for them.
+- `encoder-transactions-picker.tsx` (new, mirrors the existing
+  `encoder-client-picker.tsx`): a "View transactions — pick a
+  client…" dropdown listing every one of `listClients()`'s results
+  (already the full assigned set — no new query needed), landing on
+  `/clients/[id]/transactions` instead of jumping straight to the
+  add-entry form. Placed next to the existing "+ Add Entry" picker on
+  the Encoder dashboard.
+- Updated the two now-stale doc comments in `dashboard/page.tsx` in
+  the process (the RLS claim and the "no UI yet" note) — left
+  otherwise alone; renaming "My Drafts" or changing `listFirmDrafts`'
+  filtering was not part of this ask and is its own follow-up if
+  wanted.
+
+### 3. Same-account debit/credit warning
+
+`general-journal-form.tsx`: before submit, checks whether any account
+code appears on a debit line AND a credit line within the *same*
+entry — almost always a typo (wrong row's account picked, or two
+lines meant to net against each other instead of standing alone) —
+and confirms via `window.confirm()` before proceeding, same
+non-blocking pattern as the existing duplicate-entry check added in
+the prior PR. Runs client-side against component state (`rows`), no
+network round-trip needed, checked before the (network-dependent)
+duplicate check so a bad amount doesn't wait on a fetch first. Applies
+to all three form modes (`post`/`draft`/`edit`) — it's a data-quality
+check on the entry itself, not specific to how it's being saved.
+
+### 4. Test draft cleanup
+
+Not something this environment can do directly — the draft in
+question (Lumina Retail & Trading Solutions, General Journal,
+2026-01-27, "Sales invoice", ₱1,000.00, entered by Loyal) lives on the
+user's real Supabase project, and this sandbox has no credentials for
+it (`NEXT_PUBLIC_SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` both empty
+in `.env.local` here, consistent with every other PR's "no live
+Supabase project reachable" note). Once this PR is deployed, the
+safest path is the new Delete button itself — it goes through the
+exact same RLS-backed path as any other deletion, scoped to whoever's
+actually logged in. Exact steps given directly to the user in this
+session's own reply, not restated here.
+
+**Verified**: `tsc --noEmit` clean, `pnpm build` clean (all four new
+routes present: `.../[entryId]/edit`, `.../[entryId]/delete`, and the
+new `/clients/[id]/transactions/[entryId]/edit` page), `pnpm test`
+224/224 (209 above + 8 new in `edit-delete-draft.test.ts` + 7 new
+across `team-roles-rls.test.ts`'s new/extended describe blocks). UI
+not manually driven in a browser in this environment — same
+no-live-Supabase-project limitation as every prior PR in this
+session.
+
+## Follow-up: Recent Clients for every role, based on actual views — not just authored entries
+
+Requested before testing this PR: the "Recent clients" section built
+above only worked for Encoder, and only reflected entries that
+Encoder *personally created* (`getRecentClientsForEncoder`, filtered
+to `journal_entries.created_by`). Two problems with that as a
+general-purpose feature: it's Encoder-only, and authorship is the
+wrong signal even for Encoder — a Reviewer or Viewer never creates a
+journal entry at all, so an authorship-based query would leave them
+with an permanently-empty section no matter how much they actually
+use the app.
+
+**Real view tracking, not an activity proxy.** `journal_entries` has
+no signal for "a Viewer opened this client's reports" — reading
+doesn't write anything. So this needed an actual table:
+`user_client_views` (new — `db/schema/firms.ts`, alongside
+`user_client_assignments`, same per-user-per-client shape), one row
+per `(user_id, client_id)` ever visited, upserted with a fresh
+`last_viewed_at` on every view. Table creation is drizzle-kit's own
+generated migration (`db/migrations/0008_dapper_gideon.sql`, via
+`pnpm db:generate` — this app's established two-phase pattern: table
+DDL from drizzle-kit, RLS/policies hand-authored separately); RLS is
+`db/sql/015_user_client_views_rls.sql`.
+
+**RLS is deliberately the simplest policy in this app so far** — one
+`FOR ALL` policy, `USING (user_id = app_current_user_id())`, since
+this table has no legitimate cross-user read case at all (unlike
+almost everything else here, which is scoped by firm/client access
+but still meant for multiple roles to see the same rows). `WITH
+CHECK` additionally requires `client_id IN
+(SELECT app_accessible_client_ids())` — belt-and-suspenders, since
+`recordClientView()` only ever runs after `getClient()` already
+confirmed access, but it costs nothing to also enforce it at the row
+level rather than trusting the caller. No explicit `GRANT`: new
+tables already inherit `keepbooks_app`'s privileges from 001's
+`ALTER DEFAULT PRIVILEGES`, same as `002_password_reset.sql`'s table
+needed none.
+
+**Where the write happens**: `app/(app)/clients/[id]/layout.tsx` —
+already the one place every page under a client passes through
+(Accounts, Contacts, Transactions, Reports, the draft-entry form,
+all of it), and already calls `getClient()` to confirm access before
+rendering anything. `recordClientView(user.id, id)` runs right after
+that resolves, for every role that reaches this layout (no role
+branching — client_user recording their own one client is harmless,
+just unused), wrapped in try/catch and never awaited into blocking
+the actual page: this is sidebar metadata, not something any page's
+correctness depends on, matching this same layout's own established
+"never let a secondary concern break the primary render" posture
+(see its doc comment on why it avoids `redirect()`/`notFound()`
+already).
+
+**`lib/data/clients.ts`**: `recordClientView()` (the upsert above)
+and `getRecentClientsForUser()` — replaces `getRecentClientsForEncoder`
+entirely (deleted from `lib/data/dashboard.ts`), ordered by
+`user_client_views.last_viewed_at` descending, `INNER JOIN`ed against
+`clients`. "Only show clients the user is allowed to access" falls
+out of that join for free: `clients` is itself RLS-scoped by
+`app_accessible_client_ids()`, so a view row for a client this
+session can no longer reach (e.g. an assignment removed after the
+view was recorded) just doesn't join — no separate filter needed,
+and proven by a dedicated test rather than assumed (see below).
+
+**`app/(app)/layout.tsx`**: `SidebarShell`'s `recentClients` prop is
+now populated for every firm-staff role, not just Encoder —
+`platform_admin` is the one exclusion (its dashboard's "clients" are
+firms across the whole platform, not something this per-client-page
+layout ever wraps, so there's nothing for the query to reflect). "For
+roles that already have a Clients link, keep it and add Recent
+clients below it" needed no code change at all: the section already
+rendered below `navItems` in the same `<nav>`, and `staffNav()`
+already gives every role but Encoder a Clients link — the two just
+stack naturally once `recentClients` stops being conditioned on
+`role === "encoder"`.
+
+**Tests**: new `db/__tests__/user-client-views.test.ts` (8 tests) —
+`recordClientView()` upserts in place rather than duplicating a row
+on a second view; a user cannot record a view for a client they
+can't access (`WITH CHECK` rejects it) while Owner can for any client
+in the firm; direct RLS proof that one user's `SELECT` never returns
+another's rows and that a user can't `INSERT` a view attributed to
+someone else; `getRecentClientsForUser()` orders by recency (not
+insertion order), respects `limit`, and — the one genuinely
+load-bearing behavior proven rather than assumed — a view row for a
+client whose assignment was since removed silently drops out of the
+result instead of leaking a client the session can no longer access.
+
+**Verified**: `pnpm db:generate` produced a clean single-table
+migration; `pnpm db:migrate` applied both it and 015 without issue
+against a database already carrying everything through PR #28/#29.
+`tsc --noEmit` and `pnpm build` both clean. `pnpm test`: 232/232 (224
+above + 8 new). UI not manually driven in a browser in this
+environment, same limitation as every prior PR in this session.
+
+## Follow-up: keepbooks_app couldn't write to user_client_views at all on the real project
+
+Reported live after deploying the above: the sidebar's Recent Clients
+section never appeared for any role, and `select * from
+user_client_views` on the real Supabase project came back empty —
+zero rows, ever, despite navigating clients repeatedly. This is a
+straightforward grant gap, and a genuinely useful catch: it means the
+implicit-grant assumption this app has been making since
+`002_password_reset.sql` (new tables inherit `keepbooks_app`'s
+privileges from `001_functions_triggers_rls.sql`'s `ALTER DEFAULT
+PRIVILEGES`, no explicit `GRANT` needed) had never actually been
+round-trip tested against a real Supabase project before now —
+`user_client_views` is the first *new table* this app has shipped
+that a real user's real traffic touched immediately after deploy. The
+exact reason the implicit grant didn't apply here wasn't fully
+isolated (a real Supabase project can have more than one Postgres
+role in play across the dashboard SQL editor, a pooled connection,
+and a migration script — `ALTER DEFAULT PRIVILEGES` only ever binds
+to the one role that ran it, and confirming which role that actually
+was on this specific project isn't something reachable from this
+sandbox) — rather than keep chasing it, the fix is unconditional.
+
+- `db/sql/016_user_client_views_grant.sql`: an explicit `GRANT
+  SELECT, INSERT, UPDATE, DELETE ON user_client_views TO
+  keepbooks_app`. New file, not an edit to 015 — 015 was already
+  applied (and tracked in `_sql_migrations_applied`) on the real
+  project by the time this was reported, so editing it in place would
+  never have re-run there; `db:migrate`'s per-file tracking is exactly
+  why a fix has to land as a new file (same reasoning as every other
+  `_sql_migrations_applied`-tracked file in this app). Verified
+  locally by deliberately `REVOKE`ing the grant, confirming the exact
+  failure mode reproduces (`permission denied for table
+  user_client_views`, Postgres code `42501`), then confirming the new
+  migration file fixes it.
+- Left `002_password_reset.sql`'s table alone — no live evidence it's
+  actually broken, and it's an already-applied file everywhere, so
+  editing it wouldn't help even if it were. Worth keeping in mind as
+  the same theoretical gap if it's ever reported.
+
+**Why this was invisible without the user going and querying the
+table directly**: `recordClientView()`'s caller
+(`app/(app)/clients/[id]/layout.tsx`) deliberately treats it as
+best-effort — a `try/catch` around a metadata write that must never
+turn a page that otherwise loaded fine into a 500. That's still the
+right call (an Insert failing here is not the user's problem), but
+the `catch` was only doing a bare `console.error(err)` — real
+information, but sitting in a server log nobody was positioned to go
+read. Per the request to log or surface rather than swallow: the
+catch now logs a structured, greppable record — `code`/`message`/
+`detail`/`hint` (the actual fields a postgres.js error carries, not
+just `.message`) alongside the `userId`/`clientId` that failed —
+still never rethrown, still never blocking the page, but now an
+actual diagnosis if it happens again for any other reason.
+
+**New diagnostic**: `scripts/inspect-user-client-views-access.ts`
+(`pnpm inspect-user-client-views-access -- <email>`) — since this
+sandbox has no credentials for the real Supabase project and can't
+reproduce a live-project-only bug directly, this script lets the
+person who *does* have those credentials do it themselves in one
+command: reports the table's existence/RLS/policies/grants via
+`MIGRATION_DATABASE_URL`, then attempts one real `INSERT` through
+`DATABASE_URL` exactly the way `recordClientView()` does it (same
+`set_config('app.current_user_id', ...)` call `withUserContext()`
+uses), printing the exact Postgres error if it fails. Verified
+locally both ways — passes cleanly against a correctly-granted table,
+and correctly surfaces `42501 permission denied` when the grant is
+deliberately revoked first.
+
+**Verified**: the local repro above (revoke → reproduce → re-grant →
+confirm clean) is the actual proof this fix works, not just that it
+applies without SQL errors. `pnpm test` 232/232, `tsc --noEmit` and
+`pnpm build` both clean.
+
+## Follow-up: writes now work, reads still show nothing — still open
+
+The 016 grant fix above resolved the write side: on the real project,
+`user_client_views` now has real rows (confirmed directly by the
+user for both an Owner and an Encoder, both against the same client).
+The sidebar's Recent Clients section still doesn't render for either
+role, even after a genuine hard refresh on `/dashboard`.
+
+Extensive code review found no bug: `getRecentClientsForUser()`'s
+query is proven correct by a dedicated passing test
+(`db/__tests__/user-client-views.test.ts`) that calls the exact same
+function against the exact same RLS policy; the `clients` table join
+target has a long-proven-working SELECT grant (every other client-
+data read in this app depends on it); `app/(app)/layout.tsx` awaits
+the call correctly and isn't shadowed by any other layout; no route-
+segment caching config (PPR, `fetchCache`, `revalidate`) is set
+anywhere in this tree; `db/client.ts`'s connection already sets
+`prepare: false` against exactly the pooler-staleness failure mode
+this app has hit once before (see `db/migrate.ts`'s own comment on
+the same issue). Every one of these was suspected and ruled out
+directly, not assumed.
+
+Since this sandbox has no credentials for the real project and can't
+reproduce a live-only symptom directly, two things shipped to
+narrow it down with the next real test instead of more theorizing:
+
+- `app/(app)/layout.tsx`: the read is now wrapped the same way the
+  write already was — logs the row count unconditionally, and logs
+  full Postgres error detail if it throws (previously it wasn't even
+  wrapped in `try`/`catch` at all, so a throw here would have failed
+  the whole page rather than just the sidebar section — worth ruling
+  out explicitly too, even though the reported symptom, a page that
+  otherwise renders fine, argues against it already).
+- `scripts/inspect-user-client-views-access.ts`: extended with a
+  third check — a live `SELECT` through `DATABASE_URL` as
+  `keepbooks_app`, running the sidebar's exact query (same
+  `set_config()` pattern), compared directly against the row count
+  `MIGRATION_DATABASE_URL` sees (ground truth, bypasses RLS). A
+  mismatch between the two would be the smoking gun; verified
+  locally that the script correctly reports both a real 0-row case
+  and a real matching-row case. Needs `DATABASE_URL` locally to run,
+  which the user doesn't currently have set — pointed them at their
+  hosting provider's environment variables as the source (the
+  deployed app is clearly already using it correctly for the write
+  side, so it's known-good to copy).
+
+**Verified**: `pnpm test` 232/232, `tsc --noEmit` and `pnpm build`
+both clean. The diagnostic script's new step 3 confirmed correct
+locally against both a populated and an empty table.
