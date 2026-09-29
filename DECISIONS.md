@@ -3359,3 +3359,81 @@ narrow it down with the next real test instead of more theorizing:
 **Verified**: `pnpm test` 232/232, `tsc --noEmit` and `pnpm build`
 both clean. The diagnostic script's new step 3 confirmed correct
 locally against both a populated and an empty table.
+
+## Pre-launch: client delete → archive
+
+Pre-launch checklist item: "change client delete to archive (keep BIR
+records)". There was never a client delete anywhere in the app (no UI, no
+API route, no data-layer function) — `clients_delete`
+(`009_team_roles_rls.sql`) existed defensively, to make DELETE
+Owner-only rather than silently denied-to-everyone-by-accident. This
+closes that gap for real, in `db/sql/017_client_archive_owner_only.sql`:
+
+1. **A genuinely new `archived` status**, distinct from the pre-existing
+   but never-actually-used `inactive` (`db/schema/enums.ts`). "Archived"
+   now means what "deleted" would otherwise have meant: this client's
+   relationship with the firm has ended, but every past
+   `journal_entries`/`audit_log` row referencing it stays exactly as
+   readable and intact as before — `client_id` foreign keys are already
+   `ON DELETE RESTRICT`, so a real DELETE could never have guaranteed
+   that anyway.
+
+2. **`clients_delete` dropped entirely.** No role's app connection can
+   delete a client now, Owner included. The old Owner-only DELETE policy
+   only existed to avoid an accidental "denied to everyone" default;
+   now that archive is the real, intentional path, keeping a live
+   DELETE grant around serves no purpose and is one more way BIR
+   history could theoretically be lost.
+
+3. **A new BEFORE UPDATE trigger**, `enforce_client_archive_owner_only()`,
+   restricting `status` transitions into or out of `'archived'` to
+   `firm_admin` only. `clients_update` (009) is intentionally broader
+   than that — Bookkeeper can edit a client's ordinary fields too — so
+   this couldn't be a blanket "status is Owner-only" rule; it only fires
+   when a transition actually touches `'archived'` on either side,
+   mirroring the exact value-diff trigger pattern
+   `enforce_bookkeeper_users_active_only_update`
+   (`012_team_lifecycle_rls.sql`) already established for narrowing a
+   broader UPDATE policy for one specific case.
+
+4. **`lib/auth/set-client-archived.ts`** mirrors the already-proven
+   `setTeamMemberActive()` shape (role check up front for a clean error
+   message, Zod input validation, `withUserContext` update, raw
+   Postgres errors logged but not shown verbatim) — minus the
+   Supabase-Auth-session-ban step, since a client isn't an auth
+   identity. Wired up via a real Next.js Server Action
+   (`app/(app)/clients/[id]/actions.ts` + `useActionState`, mirroring
+   `team-roster.tsx`'s `DeactivateButton` pattern exactly) — confirmed
+   safe here since, unlike some other mutations in this app, archiving
+   never redirects.
+
+5. **Scope decision, deliberate**: this does NOT block new
+   transaction/journal-entry entry against an archived client. The ask
+   was "keep BIR records survive," not "freeze all further activity on
+   an archived client" — those are different features, and nothing in
+   the pre-launch checklist asked for the second one. If that's wanted
+   later, it's a separate, explicit change (most likely a new RLS check
+   on the write-side policies for `journal_entries` and the four
+   document tables), not an implicit side effect of this one.
+
+Also fixed while touching the clients list page: the status badge
+(`app/(app)/clients/page.tsx`) was unconditionally styled
+emerald/green regardless of actual status — pre-existing, harmless
+until "archived" needed to visually read as different from "active".
+Now color-coded per status (`active` emerald, `onboarding` amber,
+`inactive`/`archived` slate).
+
+**Verified**: a dedicated test file,
+`db/__tests__/client-archive-rls.test.ts`, proves at the real
+`keepbooks_app` RLS-enforcing role: Owner can archive/reactivate;
+Bookkeeper cannot (even though `clients_update` otherwise lets them
+edit this client) but can still edit ordinary fields; Reviewer/
+Encoder/Viewer can't reach `clients_update` at all; DELETE affects
+zero rows for every role including Owner; a posted journal entry's
+lines and the client's own `audit_log` UPDATE row both survive
+archiving unchanged; and `setClientArchived()` itself refuses a
+non-Owner with a friendly message before ever touching the DB. The
+pre-existing `team-roles-rls.test.ts` "clients: delete stays
+Owner-only" block was renamed and rewritten to assert the new
+reality (DELETE refused for Owner too) rather than the old one.
+`pnpm test` 242/242, `tsc --noEmit` and `pnpm build` both clean.

@@ -323,7 +323,7 @@ describe("clients: create/edit", () => {
   });
 });
 
-describe("clients: delete stays Owner-only", () => {
+describe("clients: DELETE is refused for everyone, including Owner (db/sql/017_client_archive_owner_only.sql)", () => {
   // A fresh, dependent-free client for each test — journal_entries.client_id
   // is ON DELETE RESTRICT, so CLIENT_ASSIGNED_ID/CLIENT_UNASSIGNED_ID (both
   // carry accounts/contacts/journal entries from other tests) could never
@@ -354,11 +354,15 @@ describe("clients: delete stays Owner-only", () => {
     await ownerDb.delete(schema.clients).where(eq(schema.clients.id, id));
   });
 
-  it("Owner (firm_admin) CAN delete a client", async () => {
+  // 017 dropped clients_delete entirely — "delete" is now "archive"
+  // (see db/__tests__/client-archive-rls.test.ts), and no role, Owner
+  // included, has a DELETE policy on `clients` anymore.
+  it("Owner (firm_admin) CANNOT delete a client either", async () => {
     const id = await seedDeletableClient("owner-attempt");
     await withUserContext(OWNER_ID, (tx) => tx.delete(schema.clients).where(eq(schema.clients.id, id)));
-    const rows = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, id));
-    expect(rows).toHaveLength(0);
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, id));
+    expect(row).toBeDefined(); // still there — no DELETE policy matched
+    await ownerDb.delete(schema.clients).where(eq(schema.clients.id, id));
   });
 });
 

@@ -59,7 +59,14 @@ export const accountingMethodEnum = pgEnum("accounting_method", ["accrual", "cas
 
 export const booksTypeEnum = pgEnum("books_type", ["manual", "loose_leaf", "cas"]);
 
-export const clientStatusEnum = pgEnum("client_status", ["onboarding", "active", "inactive"]);
+// "archived" is the only way a client's relationship with the firm ever
+// really ends — see db/sql/017_client_archive_owner_only.sql. There is no
+// client DELETE anywhere in this app (RLS never grants it); BIR record
+// retention requires every past journal entry/audit_log row referencing a
+// client to survive indefinitely, which a real DELETE could never
+// guarantee (client_id FKs are ON DELETE RESTRICT specifically to make an
+// accidental one impossible, not just discouraged).
+export const clientStatusEnum = pgEnum("client_status", ["onboarding", "active", "inactive", "archived"]);
 
 export const accountTypeEnum = pgEnum("account_type", [
   "asset",
