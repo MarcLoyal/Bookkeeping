@@ -3359,3 +3359,33 @@ narrow it down with the next real test instead of more theorizing:
 **Verified**: `pnpm test` 232/232, `tsc --noEmit` and `pnpm build`
 both clean. The diagnostic script's new step 3 confirmed correct
 locally against both a populated and an empty table.
+
+## Pre-launch: lock down `_sql_migrations_applied`
+
+First item off the pre-launch checklist. `_sql_migrations_applied`
+(`db/migrate.ts`) tracks which hand-authored SQL files have run — pure
+migration-runner bookkeeping, never something the app's own runtime
+queries have any legitimate reason to touch. It's created ad-hoc
+inside `migrate.ts` (`create table if not exists`), not through
+drizzle's schema, so unlike every real app table it was never covered
+by any `db/sql/*.sql` file's own RLS setup at all.
+
+Checked live before writing the fix, not assumed: `keepbooks_app` had
+full `INSERT`/`SELECT`/`UPDATE`/`DELETE` on it (the same
+default-privilege inheritance `user_client_views` turned out not to
+actually provide reliably — see the grant-fix entries above), and RLS
+was never enabled. `017_lock_down_migrations_tracking_table.sql`
+closes both: `ENABLE ROW LEVEL SECURITY` with zero policies (same
+pattern `002_password_reset.sql` already uses — no policy means no
+role without `BYPASSRLS` sees or writes anything, `keepbooks_app`
+included; the schema owner's own `migrate.ts` writes are unaffected,
+since owning the table is `BYPASSRLS`-equivalent), plus an explicit
+`REVOKE` on top rather than relying on RLS alone — belt-and-suspenders,
+the same "explicit beats implicit" reasoning `016`'s own comment gives.
+
+**Verified locally**: before the fix, `keepbooks_app` could
+`SELECT * FROM _sql_migrations_applied` directly; after, that same
+query returns `permission denied for table _sql_migrations_applied`,
+while the schema-owner connection `db:migrate` itself uses still reads
+all 17 tracked rows without issue. `pnpm test` 232/232, `tsc --noEmit`
+and `pnpm build` both clean.
