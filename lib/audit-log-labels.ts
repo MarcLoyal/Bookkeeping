@@ -18,6 +18,7 @@ const TABLE_LABELS: Record<string, string> = {
   cash_disbursements: "cash disbursement",
   period_locks: "period lock",
   users: "user",
+  user_client_assignments: "client assignment",
   tax_rules: "tax rule",
   employees: "employee",
   payroll_runs: "payroll run",

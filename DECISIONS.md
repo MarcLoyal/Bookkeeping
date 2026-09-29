@@ -2637,3 +2637,120 @@ the updated code, then re-run the invite from `/settings/team`.
 
 **Verified**: `tsc --noEmit` clean, `pnpm test` 185/185 (181 above + 4
 new), `pnpm build` clean.
+
+## Team page: per-client assignment editing + deactivate/reactivate
+
+**Scope note**: this goes beyond both PR A (role model + RLS) and what
+PR B was originally scoped as (invites + team page) — it's PR C's
+territory (per-client assignment UI) plus a lifecycle-management piece
+(deactivate/reactivate) that was never in the original 4-PR split at
+all. Landed on the same branch/PR #28 anyway, consistent with how
+every prior request this session did — see the earlier note when the
+Team page itself was first built. Worth renaming/redescribing PR #28
+before merge; it now covers meaningfully more than "PR A."
+
+**1. Clients column.** `listTeamMembers()` (`lib/data/team.ts`) now
+also queries `user_client_assignments` (joined to `clients`) and groups
+client names by member id. No extra filtering needed for "Bookkeepers
+only see assignments for their own clients" — `uca_select`'s existing
+RLS policy (`client_id IN app_accessible_client_ids()`) already scopes
+which assignment *rows* are visible to the querying session, so a
+Bookkeeper viewing the page sees every team member but only the
+overlap between each member's assignments and the Bookkeeper's own
+access; an Owner sees everything. Same mechanism the "assign to
+clients" picker already relied on.
+
+**2. Edit assignments.** `lib/auth/edit-team-member-assignments.ts`
+(new) diffs the requested client list against the target's *current*
+assignments (as visible to the editor, for the same RLS reason above)
+and inserts/deletes only what changed — never a clear-and-replace,
+which would silently drop a Bookkeeper-invisible assignment on a
+client outside their own access. Owner's edit panel can also toggle
+`access_scope` (all/assigned); Bookkeeper's cannot — the option isn't
+in the form for one, and even a hand-crafted request would be rejected
+by the new `users_bookkeeper_active_only` trigger below regardless.
+No new RLS policy needed for the assignment writes themselves —
+`uca_write` (010) was already `FOR ALL`, covering UPDATE/DELETE, not
+just the INSERT it was written for.
+
+**3. Deactivate/reactivate**, `db/sql/012_team_lifecycle_rls.sql` +
+`lib/auth/set-team-member-active.ts`:
+- `users_update` (previously Owner-only) now also lets a Bookkeeper
+  UPDATE an Encoder's row, scoped the same way `uca_write` scopes
+  Bookkeeper writes (the target must have an assignment to a client the
+  Bookkeeper can access). A new `enforce_bookkeeper_users_active_only_update`
+  trigger restricts that Bookkeeper path to the `active` column alone —
+  mirrors `enforce_reviewer_status_only_update`'s column-diff pattern
+  from PR A exactly.
+- `enforce_no_self_deactivation`: nobody can flip their own `active` to
+  `false`, unconditional on actor role (the Bookkeeper path can never
+  reach an Owner's own row anyway, since it requires the target to be
+  an Encoder — this only ever actually fires for an Owner).
+- `enforce_last_owner_stays_active`: a `firm_admin` row being
+  deactivated, or having its role changed away from `firm_admin`, while
+  it's the firm's *only* active one, is rejected. Tested via a role-
+  change vector, not deactivation — a lone Owner attempting to
+  deactivate *themselves* is already blocked by the self-rule above
+  before this one would ever fire, so the cleanest independent proof
+  this trigger does its own job is a lone Owner trying to change their
+  own role to `bookkeeper` instead (not currently reachable through the
+  app's own UI, which has no role-change form at all, but reachable at
+  the RLS layer directly, which is exactly what this rule guards
+  regardless of what any particular UI currently exposes).
+- Unposted-drafts warning: `setTeamMemberActive()` counts the target's
+  `journal_entries` with `status = 'draft'` before deactivating and
+  returns it as a non-fatal `warning`, not a blocking confirmation —
+  the request said "warn," and deactivation still proceeds; drafts
+  aren't touched (no edit/delete), just no longer editable by anyone
+  signed in as that now-inactive person.
+- "End active sessions... effective immediately": `getCurrentUser()`
+  already refuses a `!active` row on every request (proven since PR
+  A), so this is already true at the app layer regardless of anything
+  below. Additionally, best-effort, `setTeamMemberActive()` asks
+  Supabase Auth to ban the identity
+  (`admin.updateUserById(id, { ban_duration: "876000h" })` — GoTrue has
+  no dedicated "forever" value, this is the commonly-used ~100-year
+  stand-in) so an already-issued session token is rejected immediately
+  rather than merely on this app's next request. **Could not verify
+  this call's exact behavior live** — no real Supabase project
+  reachable from this environment — so a failure here is surfaced as a
+  warning, never treated as the deactivation itself failing; the
+  `active`-flag mechanism is the proven backstop either way. Please
+  confirm live that an already-signed-in deactivated user is actually
+  kicked out immediately, not just on their next navigation.
+
+**4. Audit log.** Add and deactivate/reactivate are both `users`
+INSERT/UPDATE — already covered by the `audit_users` trigger since PR
+A, no change needed (and `describeAuditEntry()` already renders
+"Account deactivated"/"Account reactivated" from an `active` before/
+after diff — built earlier, unused until now). Edit (assignment
+changes) had nothing logging it at all: `user_client_assignments` gets
+its own `audit_row_change()` trigger for the first time, matching
+every other RLS-protected table, plus a `"client assignment"` label in
+`lib/audit-log-labels.ts`.
+
+**Tests**: `db/__tests__/team-lifecycle-rls.test.ts` (new, 15 tests) —
+a dedicated fixture set/file rather than appending to
+`team-roles-rls.test.ts`, since this touches `users` UPDATE broadly
+enough that sharing that file's heavily-reused `OWNER_ID`/
+`BOOKKEEPER_ID` fixtures across ~40 unrelated tests risked one test's
+deactivation leaking into another's assumptions. Covers: Bookkeeper
+deactivate/reactivate scoped to their own Encoders (positive + 3
+negative cases: wrong client, zero assignments, non-Encoder target),
+Bookkeeper can't sneak another column change in alongside `active`,
+Owner self-protection, the lone-Owner role-change case above, Owner
+deactivating a *different* Owner (needs its own two-Owner firm
+fixture, kept separate so it never risks leaving the shared fixture
+firm without an active Owner), both `user_client_assignments`
+INSERT/DELETE now producing audit rows, plus direct calls into
+`editTeamMemberAssignments()`/`setTeamMemberActive()` for the
+app-layer messages (Bookkeeper-can't-edit-non-Encoder, add+remove
+diffed correctly, self-deactivation refused before touching the DB,
+the unposted-drafts warning).
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 200/200 (185 above +
+15 new), `pnpm build` clean. UI not manually driven in a browser in
+this environment (no way to run the dev server against a real
+Supabase project here) — reviewed by hand against the same
+`useActionState`/amber-warning conventions already established and
+proven on this page's existing add-member form.

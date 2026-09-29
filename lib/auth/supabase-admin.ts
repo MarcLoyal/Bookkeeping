@@ -4,9 +4,10 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * A privileged Supabase client using SUPABASE_SERVICE_ROLE_KEY — bypasses
  * Supabase Auth's normal user-facing restrictions (can create/list/delete/
- * invite any auth.users row directly). Reserved for
- * lib/auth/invite-platform-admin.ts and lib/auth/create-team-member.ts only
- * — every prior use of this key in this app was from a standalone script
+ * invite/ban any auth.users row directly). Reserved for
+ * lib/auth/invite-platform-admin.ts, lib/auth/create-team-member.ts, and
+ * lib/auth/set-team-member-active.ts only — every prior use of this key
+ * in this app was from a standalone script
  * (scripts/migrate-demo-users-to-supabase-auth.ts,
  * scripts/create-platform-admin.ts); invite-platform-admin.ts was the first
  * time the *running app* held it, so treat it with the same care as
