@@ -5,6 +5,13 @@ import { listClients } from "@/lib/data/clients";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
+const STATUS_BADGE_STYLES: Record<string, string> = {
+  active: "bg-emerald-50 text-emerald-700",
+  onboarding: "bg-amber-50 text-amber-700",
+  inactive: "bg-slate-100 text-slate-600",
+  archived: "bg-slate-100 text-slate-500",
+};
+
 export default async function ClientsPage({
   searchParams,
 }: {
@@ -82,7 +89,11 @@ export default async function ClientsPage({
                 <td className="px-4 py-3 capitalize text-slate-600">{c.taxpayerType.replace("_", " ")}</td>
                 <td className="px-4 py-3 text-slate-600">{VAT_LABELS[c.vatStatus]}</td>
                 <td className="px-4 py-3">
-                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 capitalize">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize ${
+                      STATUS_BADGE_STYLES[c.status] ?? "bg-slate-100 text-slate-600"
+                    }`}
+                  >
                     {c.status}
                   </span>
                 </td>

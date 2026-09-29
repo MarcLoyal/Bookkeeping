@@ -5,6 +5,7 @@ import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { buildBalanceSheet, buildIncomeStatement, buildTrialBalance } from "@/lib/accounting/reports";
 import { formatCentavos } from "@/lib/money";
+import { ArchiveClientButton } from "./archive-client-button";
 import { DateOperationsCommencedField } from "./date-operations-commenced-field";
 
 function currentQuarterRange(): { from: string; to: string; label: string } {
@@ -99,6 +100,9 @@ export default async function ClientOverviewPage({ params }: { params: Promise<{
             <Link className="text-slate-700 hover:underline" href={`/clients/${id}/reports/trial-balance`}>
               View Trial Balance
             </Link>
+            {user.role === "firm_admin" && (
+              <ArchiveClientButton clientId={id} archived={client.status === "archived"} clientName={client.registeredName} />
+            )}
           </div>
         </div>
       </div>
