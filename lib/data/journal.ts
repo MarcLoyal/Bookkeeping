@@ -27,6 +27,7 @@ export type EntryWithLines = {
   status: "draft" | "posted" | "reversed";
   reversalOfEntryId: string | null;
   postedAt: Date | null;
+  createdBy: string | null;
   enteredByName: string | null;
   lines: EntryLine[];
 };
@@ -117,6 +118,7 @@ export async function listJournalEntries(
       status: e.status,
       reversalOfEntryId: e.reversalOfEntryId,
       postedAt: e.postedAt,
+      createdBy: e.createdBy,
       enteredByName: e.createdBy ? (creatorNameById.get(e.createdBy) ?? null) : null,
       lines: linesByEntry.get(e.id) ?? [],
     }));
@@ -157,6 +159,7 @@ export async function getJournalEntry(userId: string, clientId: string, entryId:
       status: entry.status,
       reversalOfEntryId: entry.reversalOfEntryId,
       postedAt: entry.postedAt,
+      createdBy: entry.createdBy,
       enteredByName: creator?.name ?? null,
       lines: lineRows.map((row) => ({
         id: row.line.id,

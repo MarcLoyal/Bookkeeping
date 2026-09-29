@@ -2973,3 +2973,172 @@ under the new migration's block rather than adding net-new coverage),
 `pnpm build` clean (confirmed the new `check-duplicate` route is in
 the build output). UI not manually driven in a browser in this
 environment, same limitation as noted above.
+
+## Draft Edit/Delete, Encoder navigation, same-account warning
+
+New PR (`claude/draft-edit-encoder-nav`, branched from `main` after
+#28 and #29 both merged), per the standing instruction to give each
+new feature its own PR from here on. Four independent asks; taken in
+order.
+
+### 1. Edit/Delete for drafts
+
+**No new RLS needed — verified the permission model was already
+complete, then wrote tests proving it**, rather than assuming a gap
+existed. `journal_entries_update`/`_delete` and `journal_lines_write`
+(`009_team_roles_rls.sql`) already put no `created_by` condition on
+`firm_admin`/`bookkeeper` at all — they can touch any draft, any
+client they can access. Encoder is scoped to `created_by = self`.
+Reviewer's `UPDATE` access exists at the RLS layer but
+`enforce_reviewer_status_only_update()` restricts it to the
+`status`/`posted_by`/`posted_at` columns only — post/approve, not
+edit — so Reviewer correctly gets no Edit button at all. Nobody but
+`firm_admin`/`bookkeeper`/the creating Encoder has a `journal_entries_
+delete` policy branch, so Delete is exactly as scoped. "Posted entries
+stay locked" was already unconditional-on-role, DB-level, and
+untouched by this PR: `enforce_journal_entry_immutability()` /
+`enforce_journal_line_immutability()` (`001_functions_triggers_rls.sql`)
+reject any UPDATE/DELETE on a posted/reversed row outright, before RLS
+role logic even matters.
+
+- `lib/data/post-transaction.ts`: `updateDraftGeneralJournal()`
+  (clear-and-replace on the entry's fields and lines — not a diff;
+  unlike `userClientAssignments`' add/remove diffing, whoever can open
+  this form already sees every one of this draft's own lines, so
+  there's no invisible-row risk) and `deleteJournalEntry()` (a plain
+  `DELETE`; lines cascade via their own FK, itself still RLS-checked
+  per row — the existing "CAN edit and delete their own draft" test
+  already proved this cascade works under RLS, not just under a
+  schema-owner connection).
+- `lib/data/journal.ts`: `EntryWithLines` gained a `createdBy` field
+  (previously only `enteredByName`, the resolved display name) —
+  needed server-side to decide whether *this* Encoder is the creator,
+  without shipping every viewer's raw user id to the client for roles
+  that don't need it.
+- New routes, both `POST` (matching every other mutation in this app —
+  see `lib/use-json-post.ts`'s own doc comment for why Route Handlers,
+  not Server Actions, and why not PATCH/DELETE-as-HTTP-verb):
+  `.../[entryId]/edit` (General Journal only — see below) and
+  `.../[entryId]/delete` (any book). Both re-check role + draft status
+  + creator-match themselves before ever calling the data layer, for a
+  clean error message — RLS is the actual backstop regardless, proven
+  by `edit-delete-draft.test.ts` calling the data-layer functions
+  directly (no route, no role pre-check) and getting the exact same
+  rejections.
+- **Edit is General-Journal-only, Delete is not.** Edit reuses
+  `GeneralJournalForm` (new `mode: "edit"` + `initialValues` props) —
+  the only book with a real draft-*editing* form, since it's the only
+  book with a real draft-*creation* form
+  (`createDraftGeneralJournal`'s own doc comment: the four specialized
+  document types have RLS support for an encoder-authored draft but no
+  UI that ever produces one). A draft on any other book only exists
+  through direct DB manipulation, so there's no form to reuse for it —
+  Delete alone is enough to clean one up, and the entry detail page
+  only shows Edit when `book === "GJ"`.
+- Entry detail page: new `draft-actions.tsx` client component (Edit
+  link + Delete button with a confirm), rendered only when the
+  server-computed `canManageDraft` is true — the same three-part
+  condition (`status === "draft"` AND (`firm_admin`/`bookkeeper` OR
+  creator)) the API routes re-check, kept in one place in the page
+  component rather than duplicated per-button.
+- **Tests**: new `db/__tests__/edit-delete-draft.test.ts` (8 tests) —
+  calls `updateDraftGeneralJournal()`/`deleteJournalEntry()` directly
+  (own fixture firm, not the shared `team-roles-rls.test.ts` fixtures)
+  to prove the actual exported functions behave correctly: creator
+  edits own draft (fields + lines both replaced), `firm_admin` edits
+  *someone else's* draft, an Encoder editing another Encoder's draft
+  is rejected (a genuine `throw`, not a silent no-op — see below),
+  same four shapes for delete, plus both functions rejecting outright
+  against a posted entry. Also added to `team-roles-rls.test.ts`
+  directly against `journal_entries`/`journal_lines`: Encoder-cannot-
+  delete-another's-draft (silent no-op, matching the existing
+  cannot-edit test's shape), Reviewer/Viewer-cannot-delete-a-draft-at-
+  all, and — the one genuinely new permission boundary this PR's UI
+  exercises for the first time — `firm_admin`/`bookkeeper` editing
+  *and* deleting an Encoder's draft (every prior edit/delete test only
+  ever proved a role managing its own entry).
+- **One real surprise, caught by the tests**: an Encoder editing
+  another Encoder's draft doesn't fail the same way for UPDATE and
+  DELETE. `DELETE`/`UPDATE`'s `USING` clause excludes the row, so
+  Postgres just affects 0 rows — silent, no error. But
+  `updateDraftGeneralJournal()`'s line-replace does a `DELETE` (0 rows,
+  silent) *then* an `INSERT` of the new lines — and `INSERT` has no
+  "0 matching rows" fallback; `WITH CHECK` rejects the new row outright
+  with a hard `new row violates row-level security policy` error. Both
+  are correctly blocked, but one throws and one doesn't — the app-layer
+  pre-check in the edit route means a real user never sees the raw
+  Postgres error either way, but the test needed to expect a `throw`
+  here specifically, not the no-op shape used everywhere else in this
+  file.
+
+### 2. Encoder navigation: Recent clients + a transactions picker
+
+Both surfaced in `dashboard/page.tsx`'s own doc comment as a flagged,
+deliberate follow-up ("Editing/deleting an existing draft has full RLS
+support... but no UI yet" — now built above; and the page's title,
+"My Drafts," predates `014_encoder_read_all_client_entries.sql`
+widening what an Encoder can even see there).
+
+- `lib/data/dashboard.ts`: `getRecentClientsForEncoder(userId, limit)`
+  — up to 5 clients, ordered by `MAX(journal_entries.created_at)`,
+  filtered to `created_by = userId` specifically (not just "clients
+  visible to me," which after the read-scope widening above would
+  include clients this Encoder has never personally entered anything
+  for). Assigned-only falls out of RLS itself, not an extra filter
+  here — `access_scope` is always `'assigned'` for this role
+  (`013_role_access_scope_check.sql`), so `app_accessible_client_ids()`
+  already excludes anything unassigned.
+- `app/(app)/layout.tsx`: `SidebarShell` takes an optional
+  `recentClients` prop, rendered as a small section below the nav
+  items, only for the Encoder role (`AppLayout` fetches it
+  conditionally). Every other role passes nothing and the section just
+  doesn't render — no layout change for them.
+- `encoder-transactions-picker.tsx` (new, mirrors the existing
+  `encoder-client-picker.tsx`): a "View transactions — pick a
+  client…" dropdown listing every one of `listClients()`'s results
+  (already the full assigned set — no new query needed), landing on
+  `/clients/[id]/transactions` instead of jumping straight to the
+  add-entry form. Placed next to the existing "+ Add Entry" picker on
+  the Encoder dashboard.
+- Updated the two now-stale doc comments in `dashboard/page.tsx` in
+  the process (the RLS claim and the "no UI yet" note) — left
+  otherwise alone; renaming "My Drafts" or changing `listFirmDrafts`'
+  filtering was not part of this ask and is its own follow-up if
+  wanted.
+
+### 3. Same-account debit/credit warning
+
+`general-journal-form.tsx`: before submit, checks whether any account
+code appears on a debit line AND a credit line within the *same*
+entry — almost always a typo (wrong row's account picked, or two
+lines meant to net against each other instead of standing alone) —
+and confirms via `window.confirm()` before proceeding, same
+non-blocking pattern as the existing duplicate-entry check added in
+the prior PR. Runs client-side against component state (`rows`), no
+network round-trip needed, checked before the (network-dependent)
+duplicate check so a bad amount doesn't wait on a fetch first. Applies
+to all three form modes (`post`/`draft`/`edit`) — it's a data-quality
+check on the entry itself, not specific to how it's being saved.
+
+### 4. Test draft cleanup
+
+Not something this environment can do directly — the draft in
+question (Lumina Retail & Trading Solutions, General Journal,
+2026-01-27, "Sales invoice", ₱1,000.00, entered by Loyal) lives on the
+user's real Supabase project, and this sandbox has no credentials for
+it (`NEXT_PUBLIC_SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` both empty
+in `.env.local` here, consistent with every other PR's "no live
+Supabase project reachable" note). Once this PR is deployed, the
+safest path is the new Delete button itself — it goes through the
+exact same RLS-backed path as any other deletion, scoped to whoever's
+actually logged in. Exact steps given directly to the user in this
+session's own reply, not restated here.
+
+**Verified**: `tsc --noEmit` clean, `pnpm build` clean (all four new
+routes present: `.../[entryId]/edit`, `.../[entryId]/delete`, and the
+new `/clients/[id]/transactions/[entryId]/edit` page), `pnpm test`
+224/224 (209 above + 8 new in `edit-delete-draft.test.ts` + 7 new
+across `team-roles-rls.test.ts`'s new/extended describe blocks). UI
+not manually driven in a browser in this environment — same
+no-live-Supabase-project limitation as every prior PR in this
+session.

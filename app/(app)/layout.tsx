@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
+import { getRecentClientsForEncoder, type RecentClientRow } from "@/lib/data/dashboard";
 import { logoutAction } from "./logout-action";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -61,10 +62,13 @@ function SignOutButton() {
 function SidebarShell({
   user,
   navItems,
+  recentClients,
   children,
 }: {
   user: { name: string; role: Role };
   navItems: NavItem[];
+  /** Encoder-only — see getRecentClientsForEncoder's own doc comment for what "recent" means here. Undefined/empty for every other role, which just renders no section at all. */
+  recentClients?: RecentClientRow[];
   children: React.ReactNode;
 }) {
   return (
@@ -87,6 +91,24 @@ function SidebarShell({
               {label}
             </Link>
           ))}
+          {recentClients && recentClients.length > 0 && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <p className="px-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Recent clients</p>
+              <div className="mt-1 space-y-0.5">
+                {recentClients.map((c) => (
+                  <Link
+                    key={c.id}
+                    href={`/clients/${c.id}/transactions`}
+                    prefetch={false}
+                    className="block truncate rounded-md px-2.5 py-1.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    title={c.name}
+                  >
+                    {c.name}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </nav>
       </aside>
       <div className="flex flex-1 flex-col">
@@ -129,8 +151,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // from /dashboard, not by using this nav at all.
   if (user && SIDEBAR_ROLES.has(user.role)) {
     const navItems = user.role === "platform_admin" ? PLATFORM_ADMIN_NAV : staffNav(user.role);
+    const recentClients = user.role === "encoder" ? await getRecentClientsForEncoder(user.id) : undefined;
     return (
-      <SidebarShell user={user} navItems={navItems}>
+      <SidebarShell user={user} navItems={navItems} recentClients={recentClients}>
         {children}
       </SidebarShell>
     );

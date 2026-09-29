@@ -1,5 +1,5 @@
 import "server-only";
-import { asc, count, eq, lte, sql } from "drizzle-orm";
+import { asc, count, desc, eq, lte, sql } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { clients, journalEntries } from "@/db/schema";
 import { activityHealthFor } from "@/lib/activity-health";
@@ -79,6 +79,37 @@ export async function getClientAttentionStat(
     current: countNeedingAttention(lastActivityNow, now),
     previous: countNeedingAttention(lastActivityWeekAgo, weekAgo),
   };
+}
+
+export type RecentClientRow = { id: string; name: string };
+
+/**
+ * Up to `limit` clients this Encoder has personally entered something for,
+ * most recent first — the sidebar's "Recent clients" shortcut. Filtered to
+ * `created_by = userId` specifically, not just "clients I can see": RLS's
+ * journal_entries_select now shows an Encoder every entry on a client they
+ * can access (014_encoder_read_all_client_entries.sql), so without this
+ * filter "recent" would mean "recently active on this client at all,"
+ * which could surface a client this Encoder has never actually touched.
+ * Assigned-only falls out of RLS itself — access_scope is always
+ * 'assigned' for this role (013_role_access_scope_check.sql), so
+ * app_accessible_client_ids() already excludes anything not assigned.
+ */
+export async function getRecentClientsForEncoder(userId: string, limit = 5): Promise<RecentClientRow[]> {
+  return withUserContext(userId, (tx) =>
+    tx
+      .select({
+        id: journalEntries.clientId,
+        name: clients.registeredName,
+        lastActivity: sql<Date>`max(${journalEntries.createdAt})`.as("last_activity"),
+      })
+      .from(journalEntries)
+      .innerJoin(clients, eq(journalEntries.clientId, clients.id))
+      .where(eq(journalEntries.createdBy, userId))
+      .groupBy(journalEntries.clientId, clients.registeredName)
+      .orderBy(desc(sql`max(${journalEntries.createdAt})`))
+      .limit(limit)
+  );
 }
 
 export type FirmDraftRow = {

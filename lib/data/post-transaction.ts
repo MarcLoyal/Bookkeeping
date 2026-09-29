@@ -489,6 +489,68 @@ export async function createDraftGeneralJournal(userId: string, input: GeneralJo
   });
 }
 
+/**
+ * Edits an existing General Journal draft in place — entry fields plus a
+ * full replace of its lines. Clear-and-replace, not a diff: unlike
+ * userClientAssignments' add/remove diffing (where a Bookkeeper's narrower
+ * view could otherwise silently drop an assignment they can't see), whoever
+ * can open this form already sees every one of this draft's own lines, so
+ * there's no invisible-row risk to guard against.
+ *
+ * RLS is the real backstop (journal_entries_update / journal_lines_write in
+ * 009_team_roles_rls.sql) — this only reaches Postgres for a caller RLS
+ * already allows: firm_admin/bookkeeper on any draft, or an Encoder on
+ * their own. The immutability triggers reject it outright the moment
+ * status isn't 'draft', regardless of role — "posted entries stay locked"
+ * needs no application-level check here to be true.
+ */
+export async function updateDraftGeneralJournal(userId: string, entryId: string, input: GeneralJournalInput): Promise<void> {
+  return withUserContext(userId, async (tx) => {
+    const resolved = await Promise.all(
+      input.lines.map(async (l) => ({
+        accountId: await getAccountIdByCode(tx, input.clientId, l.accountCode),
+        debitCentavos: l.debitCentavos,
+        creditCentavos: l.creditCentavos,
+        memo: l.memo,
+      }))
+    );
+    const lines = buildGeneralJournalLines(resolved);
+
+    await tx
+      .update(journalEntries)
+      .set({ entryDate: input.entryDate, description: input.description, referenceNo: input.referenceNo })
+      .where(eq(journalEntries.id, entryId));
+
+    await tx.delete(journalLines).where(eq(journalLines.entryId, entryId));
+    await tx.insert(journalLines).values(
+      lines.map((l, i) => ({
+        entryId,
+        lineNo: i + 1,
+        accountId: l.accountId,
+        debitCentavos: l.debitCentavos,
+        creditCentavos: l.creditCentavos,
+        memo: l.memo,
+        contactId: l.contactId,
+      }))
+    );
+  });
+}
+
+/**
+ * Deletes a draft entry outright — lines cascade via journal_lines' own FK
+ * (ON DELETE CASCADE), itself still RLS-checked per row rather than
+ * bypassed (proven in db/__tests__/team-roles-rls.test.ts's "CAN edit and
+ * delete their own draft"). Same backstop as the edit above: RLS decides
+ * who reaches this at all (firm_admin/bookkeeper on any draft, Encoder on
+ * their own), and the immutability trigger rejects a posted/reversed
+ * entry's DELETE unconditionally.
+ */
+export async function deleteJournalEntry(userId: string, entryId: string): Promise<void> {
+  return withUserContext(userId, async (tx) => {
+    await tx.delete(journalEntries).where(eq(journalEntries.id, entryId));
+  });
+}
+
 export type PayrollPayslipInput = PayslipTotals & { employeeId: string; grossTaxableIncomeCentavos: bigint };
 
 export type PayrollRunInput = {
