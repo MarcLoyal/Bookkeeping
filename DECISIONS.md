@@ -2281,3 +2281,104 @@ seed insert in this file, ordered after both demo clients exist.
   clutter in `/clients`, doesn't affect the two demo clients' data or any
   acceptance test. A fresh `db:migrate` + `seed` against a clean database
   clears it.
+
+## Investigated: platform_admin rows and all-clients visible on /settings/team
+
+Reported live on the user's real Supabase project: logged in as
+`bookkeeper@keepbooks.demo`, `/settings/team`'s roster listed the two
+`platform_admin` accounts, and its "assign to clients" picker showed
+all 5 of the firm's clients despite the same roster showing Bea's own
+access as "Assigned clients only."
+
+**Investigation**: added 5 new tests to `db/__tests__/team-roles-rls.test.ts`
+that insert a `platform_admin` row (`firm_id NULL`) and a second,
+independent firm + user, then query — through the real RLS-enforcing
+`keepbooks_app` role, exactly like a request would — as a firm
+Bookkeeper/Owner/Reviewer/Encoder/Viewer. All 5 **pass against the
+existing, unmodified policies**:
+
+- No firm role can select a `platform_admin` row directly or have one
+  appear in a full `users` listing — `users_select`
+  (`001_functions_triggers_rls.sql`) requires
+  `firm_id = app_current_firm_id()`, which a `platform_admin` row's
+  `NULL` firm_id can never satisfy (`NULL = anything` is never `TRUE`
+  in SQL), and neither of the two platform_admin-specific SELECT
+  policies (`006`, `007`) grants anything to a non-platform_admin
+  session.
+- No firm role can see a user row from a different firm — same
+  `firm_id = app_current_firm_id()` check.
+- `listClients()` (what the "assign to clients" picker actually calls)
+  for an `'assigned'`-scope Bookkeeper only returns clients they're
+  explicitly assigned to, and returns nothing at all for one with zero
+  assignments — `app_accessible_client_ids()`
+  (`009_team_roles_rls.sql`) already encodes exactly this, and an
+  existing test already covered the zero-assignment case before this.
+
+**So the policy logic itself is not the bug** — I could not reproduce
+either symptom against the same code these tests exercise. I looked
+for and rejected one database-level "hardening" that seemed appealing
+at first (`ALTER TABLE ... FORCE ROW LEVEL SECURITY` on every
+RLS-protected table, to guard against a connection that's the tables'
+owner rather than a plain granted role): this app deliberately uses
+the schema-owning role (via `MIGRATION_DATABASE_URL`) as an intentional
+RLS-bypass mechanism for legitimate cross-tenant operations —
+`db/authClient.ts` (login lookups, the platform-admin and team-member
+"is this email already registered anywhere" checks, firm bootstrap),
+`db/seed.ts`, every `scripts/*.ts` admin script, and every test file's
+own fixture setup all depend on that owner connection NOT being
+subject to RLS. `FORCE` would apply RLS to that role too, breaking all
+of it. Confirmed locally that this local sandbox's owner role
+(`keepbooks`) is actually a full Postgres superuser, which bypasses
+`FORCE` entirely regardless — so `FORCE` wouldn't even have been
+testable as "fixed" here, only silently break things the moment it
+hit a project where the owner role ISN'T a superuser (exactly a real
+Supabase project, where `postgres` is not a true superuser but
+typically does own the tables `db:migrate` created).
+
+**Most likely actual cause**: whatever role the deployed app's
+`DATABASE_URL` connects as isn't the dedicated, RLS-enforcing
+`keepbooks_app` role `db:migrate`'s `ensureAppRole()` creates and
+prints a connection string for — e.g. `DATABASE_URL` accidentally set
+to the same connection string as `MIGRATION_DATABASE_URL` (Supabase's
+`postgres` user, which owns every table and — on real Supabase
+projects — is not flagged a true superuser but does implicitly bypass
+plain `ENABLE ROW LEVEL SECURITY` as the owner). That single
+misconfiguration would explain both symptoms at once, with no policy
+bug required: unfiltered `users` rows (platform_admin included) AND
+unfiltered `clients` rows (every client, regardless of Bea's
+`access_scope`) from the exact same underlying cause.
+
+**Diagnostics to run against the real Supabase project** (`psql
+"$DATABASE_URL"` — the app's actual runtime connection, not the
+migration one):
+
+```sql
+-- 1. Which role is DATABASE_URL actually connecting as?
+select current_user;
+-- Must be keepbooks_app. If this prints "postgres" (or anything else),
+-- that's the bug — fix DATABASE_URL, no code/policy change needed.
+
+-- 2. Does that role have any RLS-bypassing attribute?
+select rolname, rolsuper, rolbypassrls from pg_roles where rolname = current_user;
+-- Both must be false.
+
+-- 3. Is RLS actually enabled on the tables in question?
+select relname, relrowsecurity from pg_class where relname in ('users', 'clients');
+-- Both must be true.
+
+-- 4. Bea's actual state (answers "is she assigned to all 5"):
+select id, email, role, access_scope from users where email = 'bookkeeper@keepbooks.demo';
+select client_id from user_client_assignments
+  where user_id = (select id from users where email = 'bookkeeper@keepbooks.demo');
+-- db/seed.ts has never inserted any user_client_assignments row for
+-- bookkeeper@keepbooks.demo — if access_scope is 'assigned' (matching
+-- what the roster showed) and this returns zero rows, she should be
+-- seeing NO clients under correct RLS, not 5, which would confirm
+-- query #1 above is the thing to fix.
+```
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 181/181 (176 above +
+5 new), `pnpm build` clean. No RLS policy or application code changed
+by this investigation — only the 5 new tests, which pass against the
+existing policies and serve as a standing regression guard for both
+boundaries regardless of what the live-project diagnosis turns up.

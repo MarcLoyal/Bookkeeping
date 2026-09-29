@@ -29,6 +29,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../schema";
 import { withUserContext } from "../client";
+import { listClients } from "../../lib/data/clients";
 
 const ownerConn = postgres(process.env.MIGRATION_DATABASE_URL!, { max: 2 });
 const ownerDb = drizzle(ownerConn, { schema });
@@ -49,6 +50,12 @@ const VIEWER_ID = "00000000-0000-4000-9100-000000000015";
 const ASSIGNED_ENCODER_ID = "00000000-0000-4000-9100-000000000016"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
 const UNASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000017"; // access_scope 'assigned', zero grants
 const ASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000018"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
+const PLATFORM_ADMIN_ID = "00000000-0000-4000-9100-000000000019"; // firm_id NULL — never belongs to any firm
+
+// A second, independent firm+client+user — proves firm isolation isn't an
+// accident of only ever having tested within one firm's fixtures.
+const OTHER_FIRM_ID = "00000000-0000-4000-9200-000000000001";
+const OTHER_FIRM_USER_ID = "00000000-0000-4000-9200-000000000002";
 
 let assetAccountId: string;
 let liabilityAccountId: string;
@@ -94,6 +101,23 @@ beforeAll(async () => {
   await upsertUser(ASSIGNED_ENCODER_ID, "rls-assigned-encoder@test.local", "encoder", "assigned");
   await upsertUser(UNASSIGNED_BOOKKEEPER_ID, "rls-unassigned-bookkeeper@test.local", "bookkeeper", "assigned");
   await upsertUser(ASSIGNED_BOOKKEEPER_ID, "rls-assigned-bookkeeper@test.local", "bookkeeper", "assigned");
+
+  // firm_id NULL — mirrors how platform_admin rows actually exist (see
+  // db/schema/enums.ts's userRoleEnum comment). upsertUser() always sets
+  // firmId: FIRM_ID, which platform_admin must never have, so this is a
+  // separate insert rather than reusing that helper.
+  await ownerDb
+    .insert(schema.users)
+    .values({ id: PLATFORM_ADMIN_ID, firmId: null, email: "rls-platform-admin@test.local", name: "RLS Platform Admin", role: "platform_admin" })
+    .onConflictDoUpdate({ target: schema.users.id, set: { role: "platform_admin", firmId: null } });
+
+  // An independent second firm, to prove cross-firm isolation isn't an
+  // accident of only ever testing within one firm's fixtures.
+  await ownerDb.insert(schema.firms).values({ id: OTHER_FIRM_ID, name: "RLS Test Firm (Other)" }).onConflictDoNothing();
+  await ownerDb
+    .insert(schema.users)
+    .values({ id: OTHER_FIRM_USER_ID, firmId: OTHER_FIRM_ID, email: "rls-other-firm-user@test.local", name: "RLS Other Firm User", role: "bookkeeper" })
+    .onConflictDoUpdate({ target: schema.users.id, set: { role: "bookkeeper", firmId: OTHER_FIRM_ID } });
 
   await ownerDb
     .insert(schema.userClientAssignments)
@@ -610,5 +634,47 @@ describe("team invites: Bookkeeper can only add Encoders, scoped to their own cl
     await expect(
       withUserContext(BOOKKEEPER_ID, (tx) => tx.insert(schema.userClientAssignments).values({ userId: REVIEWER_ID, clientId: CLIENT_ASSIGNED_ID }))
     ).rejects.toThrow();
+  });
+});
+
+// The /settings/team page's roster and "assign to clients" picker both
+// read straight off RLS (listTeamMembers / listClients, both plain
+// withUserContext() selects) — this proves the boundaries THAT page
+// depends on hold at the database level, not just because the UI happens
+// not to render the wrong rows.
+describe("users: visibility boundaries (platform_admin and cross-firm isolation)", () => {
+  const FIRM_MEMBER_IDS = [OWNER_ID, BOOKKEEPER_ID, REVIEWER_ID, ENCODER_A_ID, VIEWER_ID];
+
+  it("No firm user (Owner, Bookkeeper, Reviewer, Encoder, Viewer) can see a platform_admin row", async () => {
+    for (const id of FIRM_MEMBER_IDS) {
+      const rows = await withUserContext(id, (tx) => tx.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, PLATFORM_ADMIN_ID)));
+      expect(rows).toHaveLength(0);
+    }
+  });
+
+  it("Nobody's full users listing (what the Team page's roster queries) includes a platform_admin row", async () => {
+    for (const id of FIRM_MEMBER_IDS) {
+      const rows = await withUserContext(id, (tx) => tx.select({ id: schema.users.id }).from(schema.users));
+      expect(rows.map((r) => r.id)).not.toContain(PLATFORM_ADMIN_ID);
+    }
+  });
+
+  it("No firm user can see a user row belonging to a different firm", async () => {
+    for (const id of FIRM_MEMBER_IDS) {
+      const rows = await withUserContext(id, (tx) => tx.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, OTHER_FIRM_USER_ID)));
+      expect(rows).toHaveLength(0);
+    }
+  });
+
+  it("A Bookkeeper's client picker (listClients — what /settings/team's 'assign to clients' list uses) only shows clients they're assigned to", async () => {
+    const rows = await listClients(ASSIGNED_BOOKKEEPER_ID);
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(CLIENT_ASSIGNED_ID);
+    expect(ids).not.toContain(CLIENT_UNASSIGNED_ID);
+  });
+
+  it("An 'assigned'-scope Bookkeeper with zero assignments sees no clients in their picker at all", async () => {
+    const rows = await listClients(UNASSIGNED_BOOKKEEPER_ID);
+    expect(rows).toHaveLength(0);
   });
 });
