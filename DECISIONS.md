@@ -2188,11 +2188,8 @@ Also seeded the one demo row this surfaced was missing:
 project the way `encoder@keepbooks.demo` didn't either — but the user
 wants to create their own Encoder through the new team page above to
 test it end-to-end, not have the seed script mint a second one.
-`scripts/seed-viewer-demo-user.ts` inserts just the missing viewer row
-into the existing demo firm (idempotent, `ON CONFLICT` on the unique
-email index) — `db/seed.ts` itself can't be re-run for this, since its
-`main()` short-circuits entirely once "Keep.Books Demo Firm" already
-exists.
+`db/seed.ts` itself can't be re-run for this, since its `main()`
+short-circuits entirely once "Keep.Books Demo Firm" already exists.
 
 **Verified**: `tsc --noEmit`, `pnpm test` (176 tests — 170 above + 6
 new RLS tests for `users_insert`/`uca_write`), `pnpm build` all clean.
@@ -2202,6 +2199,27 @@ invite email in this environment) — the invite call itself reuses
 proven by `invite-platform-admin.ts` and the password-reset flow, so
 the only genuinely new surface is the RLS policies above, which are
 covered by real DB-level tests.
+
+**Bug found live, fixed same day**: the first version of
+`scripts/seed-viewer-demo-user.ts` inserted the new row with
+`id = gen_random_uuid()` — mirroring `db/seed.ts`'s own "throwaway
+local id, re-key later via `migrate-demo-users-to-supabase-auth.ts`"
+pattern. That pattern only works where
+`db/sql/004_supabase_auth.sql`'s FK from `public.users.id` to
+`auth.users.id` doesn't exist — local Postgres, which has no `auth`
+schema at all (see that file's own comment). On the user's real
+Supabase project the FK IS present (added `NOT VALID`, but enforced
+for every new insert from the moment it's added), so the random id
+was rejected immediately with a foreign key violation — this local
+sandbox's Postgres has no `auth` schema either, so the bug wasn't
+caught by `tsc`/tests/build, only by running it against real data.
+Fixed by creating the Supabase Auth user FIRST
+(`supabase.auth.admin.createUser()`, same call
+`migrate-demo-users-to-supabase-auth.ts` uses) and inserting
+`public.users` with that real id directly — the row is never in an
+FK-violating state, so there's no separate re-keying step needed
+afterward; running `pnpm migrate-demo-users` after this script is now
+a harmless no-op for `viewer@keepbooks.demo`, not a required step.
 
 ## Known non-blocking follow-ups
 
