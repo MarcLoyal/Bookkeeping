@@ -51,18 +51,43 @@ export function GeneralJournalForm({
     setRows((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const fields = Object.fromEntries(formData) as Record<string, string>;
-    submit({
-      entryDate: fields.entryDate,
-      description: fields.description,
-      referenceNo: fields.referenceNo || undefined,
-      lines: rows
-        .filter((r) => r.accountCode)
-        .map((r) => ({ accountCode: r.accountCode, debit: r.debit, credit: r.credit, memo: r.memo || undefined })),
-    });
+    const entryDate = fields.entryDate;
+    const referenceNo = fields.referenceNo || undefined;
+    const lines = rows
+      .filter((r) => r.accountCode)
+      .map((r) => ({ accountCode: r.accountCode, debit: r.debit, credit: r.credit, memo: r.memo || undefined }));
+
+    // Non-blocking: only warns when a reference number is given (see
+    // findPossibleDuplicateGeneralJournalEntry's own doc comment for why),
+    // and a "no" just aborts the submit — nothing is saved either way
+    // until this confirms or the check itself comes back clean.
+    if (referenceNo) {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/transactions/general-journal/check-duplicate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ entryDate, referenceNo, lines }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.duplicate) {
+          const d = data.duplicate;
+          const who = d.enteredByName ? ` by ${d.enteredByName}` : "";
+          const proceed = window.confirm(
+            `This looks like a duplicate of ${d.entryNo ? `entry #${d.entryNo}` : "an existing draft"} (${d.status}, entered${who}) — same date, amount, and reference number. Save anyway?`
+          );
+          if (!proceed) return;
+        }
+      } catch {
+        // Check itself failing shouldn't block saving the entry.
+      }
+    }
+
+    submit({ entryDate, description: fields.description, referenceNo, lines });
   }
 
   return (

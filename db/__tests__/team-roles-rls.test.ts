@@ -403,10 +403,10 @@ describe("journal_entries: Encoder (add own drafts, edit/delete only own, can't 
     ).rejects.toThrow();
   });
 
-  it("CANNOT see another encoder's draft — direct SELECT returns nothing, not an error", async () => {
+  it("CAN see another encoder's draft on the same client — read scope was widened by 014_encoder_read_all_client_entries.sql", async () => {
     const bId = await seedDraftEntry(ENCODER_B_ID);
     const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, bId)));
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
   });
 
   it("CAN edit and delete their own draft", async () => {
@@ -445,6 +445,72 @@ describe("journal_entries: Encoder (add own drafts, edit/delete only own, can't 
     ).rejects.toThrow();
     const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, aId));
     expect(after.status).toBe("draft");
+  });
+});
+
+// 014_encoder_read_all_client_entries.sql — Encoder's read scope widened
+// from "only entries I created" to "every entry on a client I can
+// access," matching every other role's read scope. Write access is
+// unchanged (still own-draft-only, already proven above and in the
+// "CANNOT edit another encoder's draft" test).
+describe("journal_entries: Encoder sees ALL entries on their client, not just their own (014)", () => {
+  it("CAN see another Encoder's draft (read-only — same test as above, restated under this migration's own describe block)", async () => {
+    const bId = await seedDraftEntry(ENCODER_B_ID);
+    const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, bId)));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("CAN see the Bookkeeper's draft on the same client", async () => {
+    const entryId = crypto.randomUUID();
+    await ownerDb.insert(schema.journalEntries).values({
+      id: entryId,
+      clientId: CLIENT_ASSIGNED_ID,
+      entryDate: "2026-02-01",
+      book: "GJ",
+      description: "Bookkeeper-authored draft",
+      status: "draft",
+      createdBy: BOOKKEEPER_ID,
+    });
+    await ownerDb.insert(schema.journalLines).values([
+      { entryId, lineNo: 1, accountId: assetAccountId, debitCentavos: 7500n, creditCentavos: 0n },
+      { entryId, lineNo: 2, accountId: liabilityAccountId, debitCentavos: 0n, creditCentavos: 7500n },
+    ]);
+    const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId)));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("CAN see a POSTED entry created by someone else — the actual duplicate-encoding risk this migration closes", async () => {
+    const { postGeneralJournal } = await import("../../lib/data/post-transaction");
+    const entryId = await postGeneralJournal(BOOKKEEPER_ID, {
+      clientId: CLIENT_ASSIGNED_ID,
+      entryDate: "2026-02-02",
+      description: "Bookkeeper-posted entry",
+      lines: [
+        { accountCode: "RLS-CASH", debitCentavos: 3000n, creditCentavos: 0n },
+        { accountCode: "RLS-AP", debitCentavos: 0n, creditCentavos: 3000n },
+      ],
+    });
+    const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId)));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("posted");
+  });
+
+  it("Read visibility does NOT extend to write — Encoder still cannot edit a posted entry created by someone else", async () => {
+    const { postGeneralJournal } = await import("../../lib/data/post-transaction");
+    const entryId = await postGeneralJournal(BOOKKEEPER_ID, {
+      clientId: CLIENT_ASSIGNED_ID,
+      entryDate: "2026-02-03",
+      description: "Bookkeeper-posted entry (immutable anyway, but proving RLS denies it first)",
+      lines: [
+        { accountCode: "RLS-CASH", debitCentavos: 2000n, creditCentavos: 0n },
+        { accountCode: "RLS-AP", debitCentavos: 0n, creditCentavos: 2000n },
+      ],
+    });
+    await withUserContext(ENCODER_A_ID, (tx) =>
+      tx.update(schema.journalEntries).set({ description: "Should not apply" }).where(eq(schema.journalEntries.id, entryId))
+    );
+    const [after] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(after.description).not.toBe("Should not apply");
   });
 });
 
@@ -543,7 +609,7 @@ describe("journal_entries: Bookkeeper (unchanged — full add/edit/post)", () =>
 });
 
 describe("sales_invoices: representative sample of the 4 document tables", () => {
-  it("Encoder CANNOT see a sales invoice linked to another encoder's draft", async () => {
+  it("Encoder CAN see a sales invoice linked to another encoder's draft (read scope widened by 013)", async () => {
     const entryId = await seedDraftEntry(ENCODER_B_ID);
     const [invoice] = await ownerDb
       .insert(schema.salesInvoices)
@@ -557,7 +623,7 @@ describe("sales_invoices: representative sample of the 4 document tables", () =>
       })
       .returning();
     const rows = await withUserContext(ENCODER_A_ID, (tx) => tx.select().from(schema.salesInvoices).where(eq(schema.salesInvoices.id, invoice.id)));
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
   });
 
   it("Viewer CAN select but CANNOT insert", async () => {
