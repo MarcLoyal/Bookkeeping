@@ -18,7 +18,11 @@ const APP_ROLE = "keepbooks_app";
  * builds DATABASE_URL by copying MIGRATION_DATABASE_URL's host/port/
  * database/query-string and swapping in keepbooks_app + the new
  * password — so pooler-specific settings (sslmode, pgbouncer params,
- * etc.) carry over exactly rather than being retyped by hand.
+ * etc.) carry over exactly rather than being retyped by hand. Also
+ * preserves a Supabase pooler username's ".<project-ref>" suffix (e.g.
+ * MIGRATION_DATABASE_URL's "postgres.abcdefgh" becomes
+ * "keepbooks_app.abcdefgh", not just "keepbooks_app" — the pooler
+ * requires that suffix to route the connection at all).
  */
 async function main() {
   const migrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL;
@@ -39,7 +43,16 @@ async function main() {
   await sql.end();
 
   const url = new URL(migrationDatabaseUrl);
-  url.username = APP_ROLE;
+  // Supabase's pooler expects <role>.<project-ref> as the connection
+  // username (it parses the project ref back out to route the
+  // connection) — when migrationDatabaseUrl's own username already has
+  // that shape (e.g. "postgres.abcdefgh"), keep the ".<project-ref>"
+  // suffix and swap only the role name in front of it, the same way
+  // db/migrate.ts's ensureAppRole() does. A direct (non-pooler)
+  // connection's username has no dot, so this is a no-op there.
+  const dotIndex = url.username.indexOf(".");
+  const projectRefSuffix = dotIndex === -1 ? "" : url.username.slice(dotIndex);
+  url.username = APP_ROLE + projectRefSuffix;
   url.password = password;
 
   console.log(`Reset ${APP_ROLE}'s password.\n`);

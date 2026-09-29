@@ -33,7 +33,15 @@ async function ensureAppRole(migrationClient: postgres.Sql, connectionString: st
   await migrationClient.unsafe(`CREATE ROLE ${APP_ROLE} LOGIN PASSWORD '${password.replace(/'/g, "''")}'`);
 
   const url = new URL(connectionString);
-  url.username = APP_ROLE;
+  // Supabase's pooler expects <role>.<project-ref> as the connection
+  // username (it parses the project ref back out to route the
+  // connection) — when connectionString's own username already has that
+  // shape (e.g. "postgres.abcdefgh"), keep the ".<project-ref>" suffix
+  // and swap only the role name in front of it. A direct (non-pooler)
+  // connection's username has no dot, so this is a no-op there.
+  const dotIndex = url.username.indexOf(".");
+  const projectRefSuffix = dotIndex === -1 ? "" : url.username.slice(dotIndex);
+  url.username = APP_ROLE + projectRefSuffix;
   url.password = password;
   console.log(`Created ${APP_ROLE}. Set DATABASE_URL to:\n  ${url.toString()}`);
 }

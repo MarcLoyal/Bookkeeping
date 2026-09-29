@@ -2449,3 +2449,21 @@ Three changes:
 direct `next build` run with `DATABASE_URL` forced empty confirmed the
 new check fails loudly as intended. `pnpm test` unaffected (181/181) —
 neither change touches anything the test suite exercises.
+
+**Bug found live, fixed same day**: `scripts/reset-app-role-password.ts`
+printed a `DATABASE_URL` with username `keepbooks_app` — dropping
+Supabase pooler connections' `.<project-ref>` username suffix entirely
+(e.g. `MIGRATION_DATABASE_URL`'s `postgres.abcdefgh` should become
+`keepbooks_app.abcdefgh`, not just `keepbooks_app`) — because the
+pooler parses that suffix back out of the username to route the
+connection to the right project at all; without it the connection
+fails outright. `db/migrate.ts`'s `ensureAppRole()` had the exact same
+bug in its own (structurally identical) URL-construction code, just
+never yet hit live since it only fires the first time the role is
+created fresh. Fixed both the same way: split the original
+connection's username on its first `.`, keep everything from that dot
+onward, and only swap the part before it. Verified directly (not just
+by reading it) against both a pooler-style username
+(`postgres.abcdefgh`) and a plain direct-connection username with no
+dot — the fix preserves the suffix in the first case and is a no-op in
+the second, matching what a non-pooled `MIGRATION_DATABASE_URL` needs.
