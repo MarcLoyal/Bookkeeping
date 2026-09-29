@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireCurrentUser } from "@/lib/auth/current-user";
+import { requireReportAccess } from "@/lib/auth/current-user";
 import { listAccounts } from "@/lib/data/accounts";
 import { listPostedLinesForReport } from "@/lib/data/journal";
 import { getClient } from "@/lib/data/clients";
@@ -74,7 +74,7 @@ export default async function ReportPage({
   params: Promise<{ id: string; report: string }>;
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
-  const user = await requireCurrentUser();
+  const user = await requireReportAccess();
   const { id, report } = await params;
   if (!REPORT_TITLES[report]) notFound();
 

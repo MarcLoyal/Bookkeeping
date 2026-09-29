@@ -1,8 +1,14 @@
-import { requireFirmAdmin } from "@/lib/auth/current-user";
+import { redirect } from "next/navigation";
+import { requireCurrentUser } from "@/lib/auth/current-user";
 import { NewClientForm } from "./new-client-form";
 
 export default async function NewClientPage() {
-  await requireFirmAdmin();
+  const user = await requireCurrentUser();
+  // Owner and Bookkeeper can create clients (RLS's clients_insert policy —
+  // see db/sql/009_team_roles_rls.sql); every other role redirects, same
+  // as requireFirmAdmin() used to do unconditionally before that role was
+  // added to the allowlist.
+  if (user.role !== "firm_admin" && user.role !== "bookkeeper") redirect("/dashboard");
 
   return (
     <div className="max-w-2xl">

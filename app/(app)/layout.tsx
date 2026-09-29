@@ -1,16 +1,18 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { History, LayoutDashboard, Percent, ShieldCheck, Users } from "lucide-react";
+import { History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
 import { logoutAction } from "./logout-action";
 
 const ROLE_LABELS: Record<string, string> = {
-  firm_admin: "Firm Admin",
+  firm_admin: "Owner",
   bookkeeper: "Bookkeeper",
   reviewer: "Reviewer",
   client_user: "Client",
   platform_admin: "Platform Admin",
+  encoder: "Encoder",
+  viewer: "Viewer",
 };
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -20,12 +22,25 @@ const PLATFORM_ADMIN_NAV: NavItem[] = [
   { href: "/settings/platform-admins", label: "Platform Admins", icon: ShieldCheck },
 ];
 
-/** firm_admin/bookkeeper/reviewer nav — same set every staff role already had access to on the old top-nav, just Tax Rules/Audit Log staying firm_admin-only. */
+/**
+ * firm_admin/bookkeeper/reviewer/viewer nav — Tax Rules/Audit Log stay
+ * firm_admin-only. Encoder gets its own minimal nav (just Dashboard — no
+ * Clients link; their home page's own client picker covers "which client
+ * am I encoding for," and they have no reason to browse the general
+ * client list, which reviewer/viewer/bookkeeper use for its
+ * activity/status view, not a task encoder does at all).
+ */
 function staffNav(role: Role): NavItem[] {
+  if (role === "encoder") {
+    return [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }];
+  }
   const items: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/clients", label: "Clients", icon: Users },
   ];
+  if (role === "firm_admin" || role === "bookkeeper") {
+    items.push({ href: "/settings/team", label: "Team", icon: UserPlus });
+  }
   if (role === "firm_admin") {
     items.push({ href: "/settings/tax-rules", label: "Tax Rules", icon: Percent }, { href: "/settings/audit-log", label: "Audit Log", icon: History });
   }
@@ -100,7 +115,7 @@ function SidebarShell({
  * authenticated mutation to /login. Falling back to a degraded (but present)
  * shell instead of throwing keeps that pass harmless.
  */
-const SIDEBAR_ROLES = new Set<Role>(["platform_admin", "firm_admin", "bookkeeper", "reviewer"]);
+const SIDEBAR_ROLES = new Set<Role>(["platform_admin", "firm_admin", "bookkeeper", "reviewer", "encoder", "viewer"]);
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();

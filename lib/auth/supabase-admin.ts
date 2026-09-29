@@ -3,13 +3,15 @@ import { createClient } from "@supabase/supabase-js";
 
 /**
  * A privileged Supabase client using SUPABASE_SERVICE_ROLE_KEY — bypasses
- * Supabase Auth's normal user-facing restrictions (can create/list/delete
- * any auth.users row directly). Reserved for lib/auth/invite-platform-admin.ts
- * only — every prior use of this key in this app was from a standalone
- * script (scripts/migrate-demo-users-to-supabase-auth.ts,
- * scripts/create-platform-admin.ts); this is the first time the *running
- * app* holds it, so treat it with the same care as MIGRATION_DATABASE_URL's
- * password. Do NOT import this for anything else.
+ * Supabase Auth's normal user-facing restrictions (can create/list/delete/
+ * invite/ban any auth.users row directly). Reserved for
+ * lib/auth/invite-platform-admin.ts, lib/auth/create-team-member.ts, and
+ * lib/auth/set-team-member-active.ts only — every prior use of this key
+ * in this app was from a standalone script
+ * (scripts/migrate-demo-users-to-supabase-auth.ts,
+ * scripts/create-platform-admin.ts); invite-platform-admin.ts was the first
+ * time the *running app* held it, so treat it with the same care as
+ * MIGRATION_DATABASE_URL's password. Do NOT import this for anything else.
  *
  * Reads process.env directly as static literal expressions rather than
  * through a requireEnv(name) helper — that pattern (process.env[name] with

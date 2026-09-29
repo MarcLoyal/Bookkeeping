@@ -14,7 +14,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local" });
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../schema";
@@ -29,7 +29,20 @@ let adminUserId: string;
 let hasStatutoryData = false;
 
 beforeAll(async () => {
-  const [admin] = await ownerDb.select().from(schema.users).where(eq(schema.users.role, "firm_admin")).limit(1);
+  // Scoped to TEST_CLIENT_ID's own firm, not just "any firm_admin" — other
+  // test files' fixtures (e.g. db/__tests__/team-roles-rls.test.ts) create
+  // their own throwaway firm_admin rows in unrelated firms, and an
+  // unscoped `LIMIT 1` with no ORDER BY can non-deterministically pick one
+  // of those instead of this fixture's actual owner, which then fails
+  // every RLS check below (wrong firm entirely) — same pattern
+  // acceptance.test.ts already uses for its own admin lookup.
+  const [client] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, TEST_CLIENT_ID)).limit(1);
+  if (!client) throw new Error("Seed data not found — run `pnpm db:migrate && pnpm seed` first.");
+  const [admin] = await ownerDb
+    .select()
+    .from(schema.users)
+    .where(and(eq(schema.users.firmId, client.firmId), eq(schema.users.role, "firm_admin")))
+    .limit(1);
   if (!admin) throw new Error("Seed data not found — run `pnpm db:migrate && pnpm seed` first.");
   adminUserId = admin.id;
 

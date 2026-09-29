@@ -37,6 +37,14 @@ export default async function ClientLayout({
     return <div>{children}</div>;
   }
 
+  // Encoder's only legitimate pages under a client are the draft-entry
+  // form and viewing their own draft — Accounts/Contacts/Employees/
+  // Payroll/Books/Reports are all things this role has no reason to
+  // browse (several are exactly the "no reports/balances" the role spec
+  // rules out), so the tab bar itself is skipped rather than shown and
+  // relying on each destination to turn them away.
+  const showTabs = user?.role !== "encoder";
+
   return (
     <div>
       <nav className="no-print mb-2 flex items-center gap-1.5 text-sm text-slate-500" aria-label="Breadcrumb">
@@ -57,17 +65,19 @@ export default async function ClientLayout({
         </div>
         {client.tradeName && <p className="text-sm text-slate-600">{client.tradeName}</p>}
       </div>
-      <nav className="no-print mb-6 flex gap-1 border-b border-slate-200">
-        {TABS.map((tab) => (
-          <Link
-            key={tab.href}
-            href={`/clients/${id}${tab.href}`}
-            className="rounded-t-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-          >
-            {tab.label}
-          </Link>
-        ))}
-      </nav>
+      {showTabs && (
+        <nav className="no-print mb-6 flex gap-1 border-b border-slate-200">
+          {TABS.map((tab) => (
+            <Link
+              key={tab.href}
+              href={`/clients/${id}${tab.href}`}
+              className="rounded-t-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            >
+              {tab.label}
+            </Link>
+          ))}
+        </nav>
+      )}
       {children}
     </div>
   );

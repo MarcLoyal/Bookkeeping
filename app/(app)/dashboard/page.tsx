@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AlertTriangle, Building2, CalendarClock, CalendarPlus, FileEdit, UserPlus, Users } from "lucide-react";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getClientAttentionStat, getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
+import { listClients } from "@/lib/data/clients";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
 import { listUpcomingDeadlines } from "@/lib/data/deadlines";
 import {
@@ -13,6 +14,7 @@ import {
 } from "@/lib/data/platform-dashboard";
 import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
+import { EncoderClientPicker } from "./encoder-client-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
 import { OverviewSparklineCard } from "./overview-sparkline-card";
@@ -111,6 +113,54 @@ export default async function DashboardPage() {
     );
   }
 
+  // Encoder's home page is deliberately minimal, per Team & Roles' spec:
+  // their own drafts and an add-entry button — no totals, no reports, no
+  // dashboard aggregates. Kept as its own branch rather than folded into
+  // the firm-facing one below, which fetches exactly the kind of firm-wide
+  // aggregate data (client counts, attention stats, deadlines) this role
+  // should never even request — requireReportAccess() backstops this
+  // server-side everywhere else (reports, the firm dashboard's own stat
+  // row), but this branch just never calls that data in the first place.
+  //
+  // `listFirmDrafts(user.id)` needs no createdBy filter here — RLS's
+  // journal_entries_select policy already restricts an encoder session to
+  // only their own entries (009_team_roles_rls.sql), so this genuinely is
+  // "my drafts," not "the firm's drafts," for this role specifically.
+  // Editing/deleting an existing draft has full RLS support (verified in
+  // db/__tests__/team-roles-rls.test.ts) but no UI yet — "add-entry
+  // button" was the spec's own bar for this minimal page; that's a
+  // contained follow-up, not a gap in what's enforced.
+  if (user.role === "encoder") {
+    const [drafts, clientRows] = await Promise.all([listFirmDrafts(user.id), listClients(user.id)]);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">My Drafts</h1>
+          <EncoderClientPicker clients={clientRows.map((c) => ({ id: c.id, registeredName: c.registeredName }))} />
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <ul className="divide-y divide-slate-100">
+            {drafts.map((d) => (
+              <li key={d.id} className="px-4 py-3 text-sm">
+                <Link href={`/clients/${d.clientId}/transactions/${d.id}`} className="font-medium text-slate-900 hover:underline">
+                  {d.description}
+                </Link>
+                <div className="mt-0.5 text-xs text-slate-600">
+                  {d.clientName} · <span className="text-amber-700">Draft</span> · {d.entryDate}
+                </div>
+              </li>
+            ))}
+            {drafts.length === 0 && (
+              <li className="px-4 py-10 text-center text-sm text-slate-500">No drafts yet — pick a client above to add one.</li>
+            )}
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
   const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
     getFirmDashboardStats(user.id),
     user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
@@ -145,7 +195,7 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight">Firm Dashboard</h1>
-        {user.role === "firm_admin" && (
+        {(user.role === "firm_admin" || user.role === "bookkeeper") && (
           <div className="flex items-center gap-2">
             <QuickPostPicker clients={clients.map((c) => ({ id: c.id, registeredName: c.registeredName }))} />
             <Link

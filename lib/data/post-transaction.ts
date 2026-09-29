@@ -434,6 +434,61 @@ export async function postGeneralJournal(userId: string, input: GeneralJournalIn
   });
 }
 
+/**
+ * Leaves the entry as an unposted draft — no entry_no, no posting
+ * attribution, never touches client_counters. This is the first place
+ * this app actually creates a *lingering* draft: every existing
+ * post*() function inserts a draft row only as an internal step of
+ * postEntry() and immediately flips it to posted within the same call, so
+ * "Unposted Drafts" (the /drafts page, the dashboard card) had no real
+ * write path behind it before this — Encoder is the first role that needs
+ * one (add draft entries, can't post). Deliberately general-journal only
+ * for now: the four specialized document types (sales invoice/purchase/
+ * cash receipt/disbursement) already have RLS support for an encoder-
+ * authored draft (009_team_roles_rls.sql), but wiring their own forms into
+ * a draft-saving path is a UI-layer follow-up, not part of this PR's
+ * minimal encoder flow.
+ */
+export async function createDraftGeneralJournal(userId: string, input: GeneralJournalInput): Promise<string> {
+  return withUserContext(userId, async (tx) => {
+    const resolved = await Promise.all(
+      input.lines.map(async (l) => ({
+        accountId: await getAccountIdByCode(tx, input.clientId, l.accountCode),
+        debitCentavos: l.debitCentavos,
+        creditCentavos: l.creditCentavos,
+        memo: l.memo,
+      }))
+    );
+    const lines = buildGeneralJournalLines(resolved);
+
+    // No .returning() — same false-positive on a self-referential RETURNING
+    // check documented on createClient() in lib/data/clients.ts.
+    const entryId = crypto.randomUUID();
+    await tx.insert(journalEntries).values({
+      id: entryId,
+      clientId: input.clientId,
+      book: "GJ",
+      entryDate: input.entryDate,
+      description: input.description,
+      referenceNo: input.referenceNo,
+      status: "draft",
+      createdBy: userId,
+    });
+    await tx.insert(journalLines).values(
+      lines.map((l, i) => ({
+        entryId,
+        lineNo: i + 1,
+        accountId: l.accountId,
+        debitCentavos: l.debitCentavos,
+        creditCentavos: l.creditCentavos,
+        memo: l.memo,
+        contactId: l.contactId,
+      }))
+    );
+    return entryId;
+  });
+}
+
 export type PayrollPayslipInput = PayslipTotals & { employeeId: string; grossTaxableIncomeCentavos: bigint };
 
 export type PayrollRunInput = {

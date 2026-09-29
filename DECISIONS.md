@@ -1887,7 +1887,391 @@ up for review** (ran `/code-review` against the diff after opening it):
 Re-verified after the fixes: `tsc --noEmit`, `pnpm test` (138 tests),
 `pnpm build` all clean.
 
-## Known non-blocking follow-ups
+## Team & Roles, PR A: role model + RLS rewrite
+
+First of a 4-PR split (A: roles + RLS — this PR; B: invites + team page;
+C: per-client assignment UI; D folded into B unless it turns out not to
+fit). Confirmed with you before writing any code: the role mapping and
+its two reconciliation points, what per-client access already existed,
+that a migration was needed, and the PR split itself.
+
+### Role mapping and the two reconciliations
+
+`firm_admin` → Owner and `client_user` map with no behavior change.
+Two roles genuinely differed from the new spec and were tightened, both
+approved beforehand:
+
+- **Bookkeeper could not create clients.** `clients_insert` was
+  `firm_admin`-only. Now `firm_admin` or `bookkeeper`
+  (`app_can_manage_structure()`).
+- **Reviewer was identical to Bookkeeper** — full write access via the
+  old blanket `app_is_staff()`-gated policies, with no "post/approve
+  only" distinction anywhere. Tightened via a genuine RLS split
+  (separate INSERT/UPDATE/DELETE policies replacing the old single
+  `FOR ALL` ones) plus a new trigger, `enforce_reviewer_status_only_update()`
+  (mirrors `enforce_journal_entry_immutability()`'s own OLD-vs-NEW
+  column-diffing pattern from 001) — a reviewer's UPDATE on
+  `journal_entries` may only change `status`/`posted_by`/`posted_at`,
+  nothing else, even when bundled into the same UPDATE as a legitimate
+  status change.
+
+**One judgment call flagged, not pre-cleared**: the spec's Bookkeeper
+bullet is "add/edit entries, post, view reports, export, add clients" —
+grammatically "add/edit" modifies *entries*, and "add clients" has no
+matching "edit clients." I extended `clients_update` to Bookkeeper too
+(not just `clients_insert`), since a create-only/permanently-uneditable
+client record seemed like an impractical, likely-unintended reading —
+but this one wasn't explicitly asked for, unlike the other two. Easy to
+narrow back to `firm_admin`-only if that reading's wrong.
+
+**Follow-up, confirmed after review**: keep Bookkeeper edit access, but
+verify two things and add tests. Checked both against the actual SQL
+rather than assuming:
+
+1. **Bookkeeper edit is already scoped by `access_scope`, not "every
+   client in the firm."** `clients_update`'s `USING` clause was already
+   `id IN (SELECT app_accessible_client_ids())` — the same
+   scope-respecting function every read already goes through, not a
+   broader `firm_id = app_current_firm_id()` check. An `'assigned'`-scope
+   Bookkeeper genuinely can only edit clients they're assigned to; an
+   `'all'`-scope one edits whatever they can already see. This was
+   already correct by construction (write scope was always meant to
+   mirror read scope), just not yet asserted by a test — added three:
+   assigned-scope edit succeeds on the assigned client, fails on an
+   unassigned one, and an all-scope Bookkeeper can edit anything in the
+   firm.
+2. **Delete was NOT actually Owner-only — it was no-one-only.** No
+   `clients_delete` policy existed anywhere (001 never added one, and
+   009 didn't either). Postgres RLS denies a command outright when no
+   policy grants it, for every role including Owner — so "delete stays
+   Owner-only" wasn't yet true; nobody could delete a client via the app
+   role at all. Added `clients_delete` (firm_admin-only, same
+   `app_accessible_client_ids()` scoping as everything else) — this is
+   purely defensive: no UI, API route, or data-layer function anywhere
+   in the app currently calls a client delete, so this changes no live
+   behavior today, it just makes the intended rule actually enforceable
+   the moment such a feature exists. Two tests added: Bookkeeper's
+   DELETE silently matches zero rows (RLS, not an app-level check);
+   Owner's DELETE succeeds against a client fixture built specifically
+   dependent-free for the test (`journal_entries.client_id` is `ON
+   DELETE RESTRICT`, so the suite's normal fixture clients — which carry
+   accounts/contacts/entries from other tests — could never actually be
+   deleted regardless of RLS).
+
+Encoder and Viewer are new roles, built fresh — no reconciliation needed.
+
+### Per-client access: `access_scope`, not an inferred default
+
+`app_accessible_client_ids()` and `user_client_assignments` already
+existed exactly as described — every table's RLS already joins through
+it. But the existing behavior was "bookkeeper/reviewer with zero
+assignments see zero clients" (assignment mandatory, no toggle), the
+opposite of what's needed here. Per your explicit correction: added a
+real column, `users.access_scope` (`'all' | 'assigned'`), rather than
+inferring the mode from "has any assignment rows" — inferring it would
+have silently widened access the moment someone's last assignment was
+removed, or the day a plan downgrade took away the Owner's ability to
+manage assignments.
+
+- `firm_admin` ignores this column entirely — Owner always sees every
+  client in the firm, full stop.
+- `bookkeeper`/`reviewer`/`encoder`/`viewer`: `'all'` (the column's
+  default for new rows) sees every firm client; `'assigned'` sees only
+  what's explicitly granted, even if that's currently zero.
+- RLS enforces whichever value is on the row **regardless of plan** —
+  `getPlanLimits(firm).perClientAssignmentAllowed` (this PR: always
+  `true`, trial values only — 5 users, 10 clients) will, in PR C, gate
+  only whether an *Owner can change* the setting in the UI. A downgrade
+  freezing that UI can never by itself widen anyone's actual access.
+- **Migration safety**: every pre-existing `bookkeeper`/`reviewer` row
+  is explicitly backfilled to `'assigned'` (`UPDATE users SET
+  access_scope = 'assigned' WHERE role IN (...)`) — the column's own
+  `DEFAULT 'all'` would otherwise silently widen every existing firm's
+  access the moment this migration ran. Verified live: a fresh
+  zero-assignment `'assigned'` user sees zero clients; an `'all'` user
+  sees every firm client; Owner sees everything regardless.
+
+### The RLS rewrite itself (`db/sql/009_team_roles_rls.sql`)
+
+Replaces every blanket `app_is_staff()`-gated write policy (one
+`FOR ALL` per table, shared by firm_admin/bookkeeper/reviewer alike)
+with per-role, per-action policies. New helper functions:
+`app_can_manage_structure()` (firm_admin/bookkeeper — clients, accounts,
+contacts, client_tax_types) and `app_can_encode()`. `client_counters`
+and `tax_rules` are untouched (still `app_is_staff()`/firm_admin-only
+respectively — nothing in the new spec asks to change either).
+
+`journal_entries`/`journal_lines` carry the real complexity: Encoder's
+INSERT requires `status = 'draft' AND created_by = self`; UPDATE/DELETE
+require `created_by = self AND status = 'draft'` (immutability trigger
+already blocks posted/reversed deletes for everyone); SELECT filters to
+`created_by = self` for Encoder specifically — the RLS-level answer to
+"cannot see other people's entries," not an app-layer filter. The four
+specialized document tables (sales_invoices, purchases, cash_receipts/
+disbursements + their _lines) got the identical pattern, joining through
+to their linked `journal_entries` row via `journal_entry_id` (none of
+them have their own `created_by` column) — their own `status` columns
+are collection/business status, unrelated to draft/posted.
+
+**A real Postgres gotcha rediscovered, not introduced**: `INSERT ...
+RETURNING` re-checks the SELECT policy against a snapshot that doesn't
+yet include the statement's own uncommitted row — `app_accessible_
+client_ids()` (and by extension any INSERT into `clients` with
+`.returning()`) hits this for every role, including firm_admin.
+`lib/data/clients.ts`'s `createClient()` already documented and worked
+around this before this PR touched anything; `db/__tests__/team-roles-
+rls.test.ts` hit the identical false-positive independently while being
+written and uses the same workaround (generate the id client-side, skip
+`.returning()`, confirm with a follow-up SELECT).
+
+**Rollback**: `db/rollback/009_team_roles_rls.sql` restores every
+policy/function/trigger to its exact pre-009 body. Deliberately lives
+outside `db/sql/` — `db:migrate` auto-applies anything in `db/sql/`
+ending in `.sql`, sorted by filename, and a same-named rollback file
+placed there would have sorted *before* `009_team_roles_rls.sql` itself
+and run against a database that hadn't been migrated yet (caught this
+before ever running it, by reasoning through the sort order — no bad
+migration was ever applied).
+
+### A capability that didn't exist yet: standalone drafts
+
+Discovered while wiring Encoder's "add entry" flow: every existing
+`post*()` function (`postGeneralJournal`, `postSalesInvoice`, ...)
+inserts a draft row **only as an internal step**, immediately flipping
+it to posted within the same call — there was no code path anywhere
+that left a journal entry as a genuinely persisted, unposted draft.
+"Unposted Drafts" (the `/drafts` page, the dashboard card) has always
+had real read-side support and a real RLS/DB model (`entryStatusEnum`
+includes `'draft'`, the balance-on-post trigger only fires `IF v_status
+IN ('posted', 'reversed')`) but no write path had ever used it — Encoder
+is the first role that actually needs one. Added `createDraftGeneralJournal()`
+(`lib/data/post-transaction.ts`) and `POST /api/clients/[id]/transactions/
+draft-journal`, reusing `buildGeneralJournalLines()`'s existing
+balance-check. Deliberately general-journal only for now — the four
+specialized document forms still always post immediately; their RLS
+already supports an encoder-authored draft (same as journal_entries),
+but wiring their own forms to a draft-saving path is a UI follow-up, not
+part of this PR's *minimal* encoder flow.
+
+### Encoder's minimal home page
+
+`/dashboard`'s new `encoder` branch (before the firm-facing branch, so
+it never even calls the aggregate queries that branch fetches): their
+own drafts (`listFirmDrafts(user.id)` — needs no `created_by` filter in
+the query itself, RLS's `journal_entries_select` already scopes it to
+"my entries" for this role) plus a client picker that jumps straight to
+the draft-entry form, bypassing the client's full transaction ledger
+entirely. **Editing/deleting an existing draft has full RLS support**
+(covered by the test suite) but no UI built yet — "an add-entry button"
+was the spec's own bar for *this* minimal page; the gap is a contained
+UI follow-up, not an enforcement gap.
+
+### UI-guard audit — what's covered, what leans on RLS alone
+
+"Match the database — hide nav links and buttons a role cannot use,"
+enforced server-side, not just by hiding UI:
+
+- `SidebarShell`'s nav is role-specific (Encoder: Dashboard only, no
+  Clients link; everyone else unchanged plus Owner-only Tax
+  Rules/Audit Log).
+- New `requireReportAccess()` guard (`lib/auth/current-user.ts`) — built
+  on `requireCurrentUser()`, not `requireStaffUser()`, deliberately:
+  client reports and the general ledger book are also how `client_user`
+  views their own client's numbers, so this only excludes Encoder, not
+  every non-staff role. Applied to the reports page and the books page.
+- `/clients/[id]/transactions/new/[type]`: reviewer/viewer redirected
+  outright (neither may add anything); Encoder redirected to
+  `general_journal` specifically if it tries another type.
+- `/clients/[id]/layout.tsx`'s tab bar is skipped entirely for Encoder
+  (Accounts/Contacts/Employees/Payroll/Books/Reports are all things this
+  role has no reason to browse).
+- `/clients/new` and `POST /api/clients`: `firm_admin`/`bookkeeper` only
+  now (was `firm_admin`-only) — the create-client reconciliation, made
+  to actually work end-to-end, not just at the RLS layer.
+- **Not yet given an explicit page-level Encoder redirect**: the
+  Accounts/Contacts/Employees/Payroll CRUD pages themselves. RLS is the
+  real backstop everywhere regardless (verified: Encoder cannot write to
+  any of these; reads return only what `app_accessible_client_ids()`
+  already allows), so nothing is actually exposed — this is a UI-polish
+  gap, not a security one, and the highest-value surfaces (reports,
+  books, transaction creation, the dashboard itself) are covered.
+
+### Demo accounts + tests
+
+Seeded `encoder@keepbooks.demo` / `viewer@keepbooks.demo` into the demo
+firm (`db/seed.ts`, same pattern as the existing three, `access_scope:
+'all'` set explicitly), added to `scripts/migrate-demo-users-to-
+supabase-auth.ts`'s `DEMO_USERS` so they become real, loggable-into
+Supabase Auth identities the same way. **All five demo accounts
+(including these two) must be deleted before launch** — flagged here,
+in `db/seed.ts`'s own completion log, and in README.md.
+
+`db/__tests__/team-roles-rls.test.ts` — 32 tests against the real
+`keepbooks_app` RLS-enforcing role (same pattern as `acceptance.test.ts`):
+`access_scope` visibility (all/assigned/zero-assignment/Owner-always-
+sees-everything), the Bookkeeper client-creation fix, Encoder's full
+add/edit/delete-own + can't-see-others'/can't-post matrix, Reviewer's
+post-only + can't-sneak-a-field-change-in-alongside-a-status-change,
+Viewer's read-only, Bookkeeper's unchanged full access, and
+`sales_invoices` as a representative sample of the four document tables
+(same policy pattern, not independently retested four times). Also
+covers the client edit/delete follow-up below: `'assigned'`-scope
+Bookkeeper can edit an assigned client but not one outside their
+assignment, `'all'`-scope Bookkeeper can edit any firm client, and
+Bookkeeper cannot delete a client (Owner can). Writing
+these tests caught a real, unrelated test-isolation bug: adding new
+`firm_admin`-role fixture rows exposed that `db/__tests__/payroll.test.ts`'s
+own admin lookup (`WHERE role = 'firm_admin' LIMIT 1`, no firm filter,
+no `ORDER BY`) could non-deterministically pick up a *different* firm's
+firm_admin the moment more than one existed in the dev database — fixed
+to scope by the same firm that owns its `TEST_CLIENT_ID` fixture,
+matching the pattern `acceptance.test.ts` already used correctly.
+
+Deliberately **not** covered here (PR B's territory — invites and the
+team page don't exist yet at the time this paragraph was written; see
+the follow-up below for the narrow slice that now does): the
+last-Owner rule, invite expiry/revocation, Google-invite email
+matching. PR B gets its own test file for those.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (170 tests — 138 pre-existing
++ 32 new, all passing against the real local Postgres), `pnpm build`
+all clean.
+
+### Follow-up: a minimal "add team member" flow, pulled forward from PR B
+
+While testing PR A on the real Supabase project, the next thing needed
+was a way to actually create the Encoder demo-equivalent account
+*through the app* (logged in as Bookkeeper) rather than via `pnpm seed`
+— which surfaced that **no one could add a team member from the app at
+all yet**: PR A only built the role model + RLS, and PR B (invites +
+team page) hadn't started. Rather than block on the full PR B scope,
+this adds just enough to unblock that test, with three explicit rules:
+
+1. **Bookkeeper can only create Encoder accounts** — enforced by
+   `db/sql/010_bookkeeper_add_encoder_rls.sql`'s rewritten
+   `users_insert` policy (`WITH CHECK`s the new row's `role` when the
+   inserting session is a bookkeeper), not just by the form only
+   offering "Encoder" when the current user isn't an Owner. Owner keeps
+   the original unrestricted insert.
+2. **Bookkeeper can only assign that Encoder to clients the Bookkeeper
+   is assigned to** — the rewritten `uca_write` policy on
+   `user_client_assignments` requires, for a bookkeeper-authored row,
+   both `client_id IN (SELECT app_accessible_client_ids())` (the same
+   function edit/create already use for scope-respecting access) and
+   that the target user is an Encoder in the bookkeeper's own firm (so
+   this can't be repurposed to touch some other staff member's
+   assignments). A bookkeeper-created Encoder is always `access_scope
+   = 'assigned'` with at least one client required — defaulting it to
+   `'all'` would hand the new Encoder broader access than the
+   Bookkeeper who created it has any business granting, even for an
+   `'all'`-scope Bookkeeper.
+3. **Owner can still add any role** — both policies stay unconditional
+   for `firm_admin`, unchanged from before.
+
+`lib/auth/create-team-member.ts` mirrors `invite-platform-admin.ts`'s
+already-proven shape: `supabase.auth.admin.inviteUserByEmail()` sends
+Supabase's own invite email, landing at the existing
+`app/auth/confirm/route.ts` (already generic over OTP `type`, no
+change needed) and on to `/reset-password` to set a password — the
+exact same landing path the password-reset flow already uses and has
+been verified live, rather than a new untested email flow. New page:
+`/settings/team` (`requireTeamManageAccess()`: Owner or Bookkeeper),
+with a nav link shown only to those two roles.
+
+Not built (deliberately out of scope for this slice, still PR B's
+job): editing/deactivating an existing member, removing a client
+assignment after the fact, invite expiry/revocation, the last-Owner
+rule, a firm's seat/plan limit on how many members can be added.
+
+Also seeded the one demo row this surfaced was missing:
+`viewer@keepbooks.demo` never got backfilled into an already-seeded
+project the way `encoder@keepbooks.demo` didn't either — but the user
+wants to create their own Encoder through the new team page above to
+test it end-to-end, not have the seed script mint a second one.
+`db/seed.ts` itself can't be re-run for this, since its `main()`
+short-circuits entirely once "Keep.Books Demo Firm" already exists.
+
+**Verified**: `tsc --noEmit`, `pnpm test` (176 tests — 170 above + 6
+new RLS tests for `users_insert`/`uca_write`), `pnpm build` all clean.
+Not verified live against Supabase (no real inbox to receive the
+invite email in this environment) — the invite call itself reuses
+`inviteUserByEmail()`/`app/auth/confirm/route.ts` exactly as already
+proven by `invite-platform-admin.ts` and the password-reset flow, so
+the only genuinely new surface is the RLS policies above, which are
+covered by real DB-level tests.
+
+**Bug found live, fixed same day**: the first version of
+`scripts/seed-viewer-demo-user.ts` inserted the new row with
+`id = gen_random_uuid()` — mirroring `db/seed.ts`'s own "throwaway
+local id, re-key later via `migrate-demo-users-to-supabase-auth.ts`"
+pattern. That pattern only works where
+`db/sql/004_supabase_auth.sql`'s FK from `public.users.id` to
+`auth.users.id` doesn't exist — local Postgres, which has no `auth`
+schema at all (see that file's own comment). On the user's real
+Supabase project the FK IS present (added `NOT VALID`, but enforced
+for every new insert from the moment it's added), so the random id
+was rejected immediately with a foreign key violation — this local
+sandbox's Postgres has no `auth` schema either, so the bug wasn't
+caught by `tsc`/tests/build, only by running it against real data.
+Fixed by creating the Supabase Auth user FIRST
+(`supabase.auth.admin.createUser()`, same call
+`migrate-demo-users-to-supabase-auth.ts` uses) and inserting
+`public.users` with that real id directly — the row is never in an
+FK-violating state, so there's no separate re-keying step needed
+afterward; running `pnpm migrate-demo-users` after this script is now
+a harmless no-op for `viewer@keepbooks.demo`, not a required step.
+
+### Follow-up: Viewer's demo/default access_scope was 'all' — not intentional
+
+Asked directly: no, this wasn't a deliberate security decision. The
+demo seed's `accessScope: "all"` for both Encoder and Viewer was
+purely a demo-data convenience — "makes clear these two see every demo
+client without needing per-client assignment set up separately" (the
+seed script's own comment) — not a considered default for the Viewer
+*role*. On reflection it's the wrong default for a read-only role
+specifically: Viewer can't write anything, so there's no
+least-privilege reason for it to default to seeing every client in
+the firm the moment someone's added. (Encoder is left as `"all"` here
+— not asked about, and Encoder's own write scope is a separate
+question the user hasn't raised.)
+
+Changed:
+- `lib/auth/create-team-member.ts`: a new Viewer's `access_scope` is
+  now always `'assigned'`, even with zero clients picked (sees nothing
+  until an Owner assigns some) — previously it followed the same
+  "assigned if clients picked, else all" rule as every other role.
+  Every other role's default is unchanged.
+- `db/schema/enums.ts`'s `accessScopeEnum` comment updated to note the
+  Viewer exception to the general "new members default to 'all'" rule.
+- `db/seed.ts`: `viewer@keepbooks.demo` now seeded `accessScope:
+  "assigned"` with explicit `user_client_assignments` rows for both
+  demo clients (so the demo account still has something to view,
+  rather than being seeded into a state where it sees nothing and
+  looks broken).
+- `scripts/seed-viewer-demo-user.ts`: rewritten from a one-shot
+  insert-if-missing script into an idempotent convergence script — it
+  now also corrects an already-existing row's `access_scope` to
+  `'assigned'` and backfills the missing client assignments, since the
+  user's real Supabase project already has this row seeded with the
+  old `"all"` default from before this change. **Re-run
+  `pnpm seed-viewer-demo-user`** to apply the fix there; no other step
+  needed.
+
+Not changed: an Owner creating a Viewer can still effectively grant
+firm-wide visibility by checking every client in the picker — the
+difference is that ends up as `'assigned'` with every client listed
+explicitly, not the `'all'` flag, which is arguably more audit-friendly
+anyway (every grant is an explicit row, not an implicit flag).
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` still 176/176 (this
+change doesn't touch RLS, only application-layer defaults and seed
+data, so no new RLS test was needed), `pnpm build` clean. Did not run
+`db/seed.ts` end-to-end against a fresh firm in this environment (the
+local sandbox already has a seeded demo firm, and renaming it to force
+a fresh run was blocked as a shared-resource mutation) — reviewed the
+diff by hand instead: the new insert follows the exact same
+`.returning()`-then-reference pattern already used for every other
+seed insert in this file, ordered after both demo clients exist.
 
 - Next.js 16 deprecates `middleware.ts` in favor of `proxy.ts`; the build
   logs a deprecation warning. Not yet migrated — functionally identical for
@@ -1897,3 +2281,611 @@ Re-verified after the fixes: `tsc --noEmit`, `pnpm test` (138 tests),
   clutter in `/clients`, doesn't affect the two demo clients' data or any
   acceptance test. A fresh `db:migrate` + `seed` against a clean database
   clears it.
+
+## Investigated: platform_admin rows and all-clients visible on /settings/team
+
+Reported live on the user's real Supabase project: logged in as
+`bookkeeper@keepbooks.demo`, `/settings/team`'s roster listed the two
+`platform_admin` accounts, and its "assign to clients" picker showed
+all 5 of the firm's clients despite the same roster showing Bea's own
+access as "Assigned clients only."
+
+**Investigation**: added 5 new tests to `db/__tests__/team-roles-rls.test.ts`
+that insert a `platform_admin` row (`firm_id NULL`) and a second,
+independent firm + user, then query — through the real RLS-enforcing
+`keepbooks_app` role, exactly like a request would — as a firm
+Bookkeeper/Owner/Reviewer/Encoder/Viewer. All 5 **pass against the
+existing, unmodified policies**:
+
+- No firm role can select a `platform_admin` row directly or have one
+  appear in a full `users` listing — `users_select`
+  (`001_functions_triggers_rls.sql`) requires
+  `firm_id = app_current_firm_id()`, which a `platform_admin` row's
+  `NULL` firm_id can never satisfy (`NULL = anything` is never `TRUE`
+  in SQL), and neither of the two platform_admin-specific SELECT
+  policies (`006`, `007`) grants anything to a non-platform_admin
+  session.
+- No firm role can see a user row from a different firm — same
+  `firm_id = app_current_firm_id()` check.
+- `listClients()` (what the "assign to clients" picker actually calls)
+  for an `'assigned'`-scope Bookkeeper only returns clients they're
+  explicitly assigned to, and returns nothing at all for one with zero
+  assignments — `app_accessible_client_ids()`
+  (`009_team_roles_rls.sql`) already encodes exactly this, and an
+  existing test already covered the zero-assignment case before this.
+
+**So the policy logic itself is not the bug** — I could not reproduce
+either symptom against the same code these tests exercise. I looked
+for and rejected one database-level "hardening" that seemed appealing
+at first (`ALTER TABLE ... FORCE ROW LEVEL SECURITY` on every
+RLS-protected table, to guard against a connection that's the tables'
+owner rather than a plain granted role): this app deliberately uses
+the schema-owning role (via `MIGRATION_DATABASE_URL`) as an intentional
+RLS-bypass mechanism for legitimate cross-tenant operations —
+`db/authClient.ts` (login lookups, the platform-admin and team-member
+"is this email already registered anywhere" checks, firm bootstrap),
+`db/seed.ts`, every `scripts/*.ts` admin script, and every test file's
+own fixture setup all depend on that owner connection NOT being
+subject to RLS. `FORCE` would apply RLS to that role too, breaking all
+of it. Confirmed locally that this local sandbox's owner role
+(`keepbooks`) is actually a full Postgres superuser, which bypasses
+`FORCE` entirely regardless — so `FORCE` wouldn't even have been
+testable as "fixed" here, only silently break things the moment it
+hit a project where the owner role ISN'T a superuser (exactly a real
+Supabase project, where `postgres` is not a true superuser but
+typically does own the tables `db:migrate` created).
+
+**Most likely actual cause**: whatever role the deployed app's
+`DATABASE_URL` connects as isn't the dedicated, RLS-enforcing
+`keepbooks_app` role `db:migrate`'s `ensureAppRole()` creates and
+prints a connection string for — e.g. `DATABASE_URL` accidentally set
+to the same connection string as `MIGRATION_DATABASE_URL` (Supabase's
+`postgres` user, which owns every table and — on real Supabase
+projects — is not flagged a true superuser but does implicitly bypass
+plain `ENABLE ROW LEVEL SECURITY` as the owner). That single
+misconfiguration would explain both symptoms at once, with no policy
+bug required: unfiltered `users` rows (platform_admin included) AND
+unfiltered `clients` rows (every client, regardless of Bea's
+`access_scope`) from the exact same underlying cause.
+
+**Diagnostics to run against the real Supabase project** (`psql
+"$DATABASE_URL"` — the app's actual runtime connection, not the
+migration one):
+
+```sql
+-- 1. Which role is DATABASE_URL actually connecting as?
+select current_user;
+-- Must be keepbooks_app. If this prints "postgres" (or anything else),
+-- that's the bug — fix DATABASE_URL, no code/policy change needed.
+
+-- 2. Does that role have any RLS-bypassing attribute?
+select rolname, rolsuper, rolbypassrls from pg_roles where rolname = current_user;
+-- Both must be false.
+
+-- 3. Is RLS actually enabled on the tables in question?
+select relname, relrowsecurity from pg_class where relname in ('users', 'clients');
+-- Both must be true.
+
+-- 4. Bea's actual state (answers "is she assigned to all 5"):
+select id, email, role, access_scope from users where email = 'bookkeeper@keepbooks.demo';
+select client_id from user_client_assignments
+  where user_id = (select id from users where email = 'bookkeeper@keepbooks.demo');
+-- db/seed.ts has never inserted any user_client_assignments row for
+-- bookkeeper@keepbooks.demo — if access_scope is 'assigned' (matching
+-- what the roster showed) and this returns zero rows, she should be
+-- seeing NO clients under correct RLS, not 5, which would confirm
+-- query #1 above is the thing to fix.
+```
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 181/181 (176 above +
+5 new), `pnpm build` clean. No RLS policy or application code changed
+by this investigation — only the 5 new tests, which pass against the
+existing policies and serve as a standing regression guard for both
+boundaries regardless of what the live-project diagnosis turns up.
+
+### Follow-up: DATABASE_URL was missing locally, closing the loop
+
+The user's `.env.local` had `MIGRATION_DATABASE_URL` but no
+`DATABASE_URL` at all — yet `.env.preview-check` (a hosting-provider
+generated file, not part of this repo) already showed a `DATABASE_URL`
+value they never set themselves. `db/client.ts` already throws
+immediately if `process.env.DATABASE_URL` is falsy — there is no
+code-level fallback to any other connection anywhere in the app (only
+place `DATABASE_URL`, unprefixed, is read at all). So a local
+`pnpm dev` run with it genuinely absent should crash outright on the
+first request touching the database, not silently show wrong-but-
+plausible data.
+
+Given that, and that a `DATABASE_URL` already existed somewhere the
+user hadn't set it, the most likely explanation for the whole
+platform_admin/all-clients symptom pair above is a hosting platform
+auto-injecting its own `DATABASE_URL` (commonly done by a linked
+Postgres/Supabase integration) independently of the project's own env
+files or dashboard settings — and that auto-injected value being
+Supabase's default `postgres` connection (table owner, bypasses plain
+`ENABLE ROW LEVEL SECURITY`), not the dedicated `keepbooks_app` role
+this app's own RLS design depends on. This can't be confirmed from
+inside this sandbox — it requires checking the actual hosting
+provider's environment variable settings and/or querying the deployed
+app's real `DATABASE_URL` directly (`select current_user;`).
+
+Three changes:
+
+1. **`next.config.ts`** now throws if `DATABASE_URL` is unset, at
+   config-evaluation time — before `next dev`/`next build`/`next start`
+   do anything, not just lazily on the first request that happens to
+   import `db/client.ts`. Verified live: `next build` with
+   `DATABASE_URL` unset fails immediately with a clear error; with it
+   set, the build succeeds unchanged. Deliberately scoped to
+   `DATABASE_URL` only, not a general env validator — and deliberately
+   NOT a fix for the actual live symptom (an auto-injected,
+   wrong-but-present `DATABASE_URL` still passes this check; a presence
+   check can only catch "missing," not "wrong role") — it exists so a
+   genuinely missing `DATABASE_URL` (this environment's actual state)
+   fails loudly instead of looking like a data bug.
+2. **`scripts/reset-app-role-password.ts`** (new): `keepbooks_app`'s
+   password is only ever printed once, at role-creation time, by
+   `db:migrate`'s `ensureAppRole()` — a pre-existing role's password is
+   deliberately left untouched (and thus unprintable) on every later
+   run. Since the role already exists on the user's project from PR
+   A's own testing, there was no way to recover the original password;
+   this resets it via `MIGRATION_DATABASE_URL` (same privilege level
+   `ensureAppRole()` already uses for `CREATE ROLE`) and prints the
+   `DATABASE_URL` to set, built by copying `MIGRATION_DATABASE_URL`'s
+   host/port/database/query-string and swapping in `keepbooks_app` +
+   the new password — so pooler-specific settings (`sslmode`, pgbouncer
+   params, etc.) carry over exactly rather than being retyped by hand.
+   Not run live in this sandbox: altering a role's password was denied
+   by the environment's own permission classifier as a secret-store
+   write, even against this sandbox's own disposable local Postgres —
+   verified by code review and `tsc` instead, mirroring
+   `db/migrate.ts`'s own already-proven `ensureAppRole()` URL-
+   construction logic closely enough that I'm confident in it, but this
+   is the one piece of this follow-up the user should watch run for the
+   first time.
+
+**Verified**: `tsc --noEmit` clean, `pnpm build` clean (both with
+`DATABASE_URL` set, matching this sandbox's own `.env.local`), and a
+direct `next build` run with `DATABASE_URL` forced empty confirmed the
+new check fails loudly as intended. `pnpm test` unaffected (181/181) —
+neither change touches anything the test suite exercises.
+
+**Bug found live, fixed same day**: `scripts/reset-app-role-password.ts`
+printed a `DATABASE_URL` with username `keepbooks_app` — dropping
+Supabase pooler connections' `.<project-ref>` username suffix entirely
+(e.g. `MIGRATION_DATABASE_URL`'s `postgres.abcdefgh` should become
+`keepbooks_app.abcdefgh`, not just `keepbooks_app`) — because the
+pooler parses that suffix back out of the username to route the
+connection to the right project at all; without it the connection
+fails outright. `db/migrate.ts`'s `ensureAppRole()` had the exact same
+bug in its own (structurally identical) URL-construction code, just
+never yet hit live since it only fires the first time the role is
+created fresh. Fixed both the same way: split the original
+connection's username on its first `.`, keep everything from that dot
+onward, and only swap the part before it. Verified directly (not just
+by reading it) against both a pooler-style username
+(`postgres.abcdefgh`) and a plain direct-connection username with no
+dot — the fix preserves the suffix in the first case and is a no-op in
+the second, matching what a non-pooled `MIGRATION_DATABASE_URL` needs.
+
+## Inviting an email that already has a Supabase Auth identity but no firm
+
+**The bug**: `createTeamMember()`'s original "already registered" branch
+handled `inviteUserByEmail()` failing (which it always does for an
+email that already has ANY Supabase Auth identity — brand new only)
+by falling back to `listUsers()` to find the existing identity, then
+just inserting the `public.users` row and returning `{ ok: true }` —
+**no email was ever sent in that branch**. Reported live: inviting
+`loyalcreatives@gmail.com` (which had signed in with Google once, with
+no firm yet) as an Encoder silently attached the row and reported
+success, with nothing actually delivered.
+
+**The fix** — `lib/auth/create-team-member.ts` now distinguishes three
+outcomes for an email that already has *some* identity, checked in
+this order:
+
+1. **Already a member of THIS firm** — refused with
+   `"<email> is already a member of this firm (role: X)."`, nothing
+   touched.
+2. **Already belongs to a DIFFERENT firm** — refused with
+   `"<email> already belongs to a different firm. It can't be added
+   here."`, nothing touched. A `platform_admin` row (`firm_id` NULL)
+   gets its own branch here too — never adoptable as a firm member,
+   same generic "already registered" message as before.
+3. **A Supabase Auth identity exists but no `public.users` row
+   anywhere** (this case) — attach them to the firm using their
+   *existing* auth id (no new Supabase Auth user created — reusing the
+   same `listUsers()` lookup the old code already did, just acting on
+   it correctly this time), then call
+   `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser:
+   false, ... } })` to actually send a magic-link sign-in email.
+   `signInWithOtp` was chosen over `inviteUserByEmail` (which only
+   works for brand-new identities and is what failed in the first
+   place) and over `resetPasswordForEmail` (which works for any
+   existing identity too, but is semantically a "reset your password"
+   email — confusing for someone who already has working Google
+   sign-in and isn't resetting anything). It doesn't touch their
+   existing credentials; Google sign-in still works exactly as before
+   afterward, the magic link is just one more way in for this email.
+   Failure to send this courtesy email doesn't roll back the
+   attachment (the part that actually matters already succeeded) —
+   surfaced instead as a non-fatal `warning` in the result, rendered
+   on the Team page in amber, distinct from a green success or a red
+   error. Never silent either way, per the requested safety rules.
+
+A genuinely brand-new email (no auth identity at all) is unaffected —
+still goes through `inviteUserByEmail()` exactly as before.
+
+**On the literal wording** ("You've been added to Firm X as an
+Encoder"): this app has no email-sending infrastructure of its own —
+`lib/email/send.ts` doesn't exist anymore; every transactional email
+this app sends goes through a Supabase Auth email template
+(Invite / Magic Link / Recovery), configured in the Supabase dashboard,
+not in this codebase. `templateData` (`firm_name`, `role_label`,
+`full_name`) is passed to both `inviteUserByEmail()` and
+`signInWithOtp()` calls and is available to whichever template fires
+as `{{ .Data.firm_name }}` / `{{ .Data.role_label }}` — but only if
+that template has been customized to reference them; Supabase's
+default templates don't. To get the exact requested wording, customize
+the **Magic Link** template under Supabase Dashboard → Authentication →
+Email Templates:
+
+```
+Subject: You've been added to {{ .Data.firm_name }}
+
+Body:
+<h2>You've been added to {{ .Data.firm_name }}</h2>
+<p>You've been added as {{ .Data.role_label }}. Click below to sign in:</p>
+<p><a href="{{ .ConfirmationURL }}">Sign in to Keep.Books</a></p>
+```
+
+Consider doing the same for the **Invite** template (same two
+variables, plus `{{ .Data.full_name }}`) for the brand-new-email path,
+for consistency. Until customized, both paths still send a real,
+working sign-in link — just with Supabase's generic default copy.
+
+### The "Create your firm" flow — investigated, two real gaps found
+
+Reported: signing up with Google as `loyalcreatives@gmail.com` never
+created a firm or a `public.users` row. Traced both
+`app/auth/callback/route.ts` → `lib/auth/oauth-callback.ts` (routes a
+firmless Google identity to `/onboarding/firm` — correct) and
+`app/onboarding/firm/actions.ts` → `lib/auth/create-firm-for-user.ts`
+(creates the firm + first user in one transaction — also correct) by
+hand; neither has a bug that would silently swallow a firm creation.
+
+**Most likely actual explanation for this specific email**: it was
+very likely already attached to the tester's own firm by the invite
+bug above (fixed in this same change) — a silent, no-email attach
+followed by a genuine "sign up with Google" attempt would land the
+person straight back into the firm they were already (silently)
+attached to, rather than onboarding a new one, which looks exactly
+like "signing up never created a firm" from the outside. Verifying
+this needs looking at the actual live row, which this sandbox can't
+do — see `scripts/inspect-user-by-email.ts` below.
+
+**Two real, separate gaps found and fixed regardless**, both
+matching the explicit ask to "let a half-finished signup resume":
+
+1. `app/login/page.tsx` and `app/signup/page.tsx` both checked
+   `getCurrentUser()` only — which returns `null` for a Google identity
+   that authenticated but never finished onboarding (by design, since
+   it has no profile row yet — see that function's own doc comment).
+   That meant a person in exactly that pending state, landing back on
+   `/login` or `/signup` (e.g. via the "Create your firm" / "Sign in"
+   links, or a bookmark), saw a fresh, blank form with no
+   acknowledgment they'd already started — not wrong exactly (every
+   *other* protected page already correctly resumed them via
+   `requireCurrentUser()`'s own pending check), but the two most
+   likely re-entry points didn't. Both now also check
+   `getPendingGoogleSignup()` and redirect to `/onboarding/firm`.
+2. `lib/auth/signup.ts`'s email/password path: Supabase's `signUp()`
+   returns the exact same "User already registered" error whether the
+   email is fully onboarded elsewhere or only has a half-finished
+   Google identity with no firm — and the generic message is a dead
+   end for the second case (already flagged in this file's own code
+   comment as "no way yet to resume rather than start over"). Now
+   checks whether a `public.users` row actually exists for that email
+   before deciding which message to show; if not, the error becomes
+   "You've already started signing in with this email (e.g. with
+   Google) but haven't finished setting up your firm. Sign in with
+   that same method to pick up where you left off." instead of the
+   unhelpful generic one.
+
+**New read-only diagnostic**: `scripts/inspect-user-by-email.ts`
+(`pnpm inspect-user -- <email>`) prints everything this app knows
+about one email — its `public.users` row (if any) and its Supabase
+Auth identity (if any) — side by side, with a plain-language diagnosis
+of which state it's in. Makes no changes. Built because every mutation
+script in this repo (`delete-test-signup.ts`,
+`migrate-demo-users-to-supabase-auth.ts`) already assumes you know
+which case you're in before running it, and this incident showed that
+isn't always obvious from the outside.
+
+**Tests**: `db/__tests__/create-team-member.test.ts` (new) covers the
+three "already has some identity" branches directly against real
+Postgres — no Supabase credentials needed, since all three return
+before `createTeamMember()` ever calls the Supabase Admin API. The
+fourth case (attach + `signInWithOtp`) isn't covered by an automated
+test, the same way `lib/auth/invite-platform-admin.ts`'s own Supabase
+Admin API calls aren't — this codebase tests DB-level RLS/data-layer
+boundaries, not Supabase's own SDK behavior against a real project.
+
+**What to run to apply these changes**:
+
+```bash
+# 1. See loyalcreatives@gmail.com's actual current state before retesting
+pnpm inspect-user -- loyalcreatives@gmail.com
+```
+
+If that shows a `public.users` row already attached to your firm as
+Encoder (the likely residue of the original bug) and you want to
+re-test the full flow cleanly, remove just that row yourself (this
+does NOT touch their Supabase Auth identity, so a subsequent Google
+sign-in correctly resumes as "pending" per the fixes above):
+
+```sql
+delete from user_client_assignments where user_id = (select id from users where email = 'loyalcreatives@gmail.com');
+delete from users where email = 'loyalcreatives@gmail.com';
+```
+
+No new SQL migration this round — `users_insert`/`uca_write`'s
+policies already don't care whether an inserted row's id came from a
+brand-new `inviteUserByEmail()` call or a reused existing identity, so
+`pnpm db:migrate` has nothing new to apply. Just redeploy/restart with
+the updated code, then re-run the invite from `/settings/team`.
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 185/185 (181 above + 4
+new), `pnpm build` clean.
+
+## Team page: per-client assignment editing + deactivate/reactivate
+
+**Scope note**: this goes beyond both PR A (role model + RLS) and what
+PR B was originally scoped as (invites + team page) — it's PR C's
+territory (per-client assignment UI) plus a lifecycle-management piece
+(deactivate/reactivate) that was never in the original 4-PR split at
+all. Landed on the same branch/PR #28 anyway, consistent with how
+every prior request this session did — see the earlier note when the
+Team page itself was first built. Worth renaming/redescribing PR #28
+before merge; it now covers meaningfully more than "PR A."
+
+**1. Clients column.** `listTeamMembers()` (`lib/data/team.ts`) now
+also queries `user_client_assignments` (joined to `clients`) and groups
+client names by member id. No extra filtering needed for "Bookkeepers
+only see assignments for their own clients" — `uca_select`'s existing
+RLS policy (`client_id IN app_accessible_client_ids()`) already scopes
+which assignment *rows* are visible to the querying session, so a
+Bookkeeper viewing the page sees every team member but only the
+overlap between each member's assignments and the Bookkeeper's own
+access; an Owner sees everything. Same mechanism the "assign to
+clients" picker already relied on.
+
+**2. Edit assignments.** `lib/auth/edit-team-member-assignments.ts`
+(new) diffs the requested client list against the target's *current*
+assignments (as visible to the editor, for the same RLS reason above)
+and inserts/deletes only what changed — never a clear-and-replace,
+which would silently drop a Bookkeeper-invisible assignment on a
+client outside their own access. Owner's edit panel can also toggle
+`access_scope` (all/assigned); Bookkeeper's cannot — the option isn't
+in the form for one, and even a hand-crafted request would be rejected
+by the new `users_bookkeeper_active_only` trigger below regardless.
+No new RLS policy needed for the assignment writes themselves —
+`uca_write` (010) was already `FOR ALL`, covering UPDATE/DELETE, not
+just the INSERT it was written for.
+
+**3. Deactivate/reactivate**, `db/sql/012_team_lifecycle_rls.sql` +
+`lib/auth/set-team-member-active.ts`:
+- `users_update` (previously Owner-only) now also lets a Bookkeeper
+  UPDATE an Encoder's row, scoped the same way `uca_write` scopes
+  Bookkeeper writes (the target must have an assignment to a client the
+  Bookkeeper can access). A new `enforce_bookkeeper_users_active_only_update`
+  trigger restricts that Bookkeeper path to the `active` column alone —
+  mirrors `enforce_reviewer_status_only_update`'s column-diff pattern
+  from PR A exactly.
+- `enforce_no_self_deactivation`: nobody can flip their own `active` to
+  `false`, unconditional on actor role (the Bookkeeper path can never
+  reach an Owner's own row anyway, since it requires the target to be
+  an Encoder — this only ever actually fires for an Owner).
+- `enforce_last_owner_stays_active`: a `firm_admin` row being
+  deactivated, or having its role changed away from `firm_admin`, while
+  it's the firm's *only* active one, is rejected. Tested via a role-
+  change vector, not deactivation — a lone Owner attempting to
+  deactivate *themselves* is already blocked by the self-rule above
+  before this one would ever fire, so the cleanest independent proof
+  this trigger does its own job is a lone Owner trying to change their
+  own role to `bookkeeper` instead (not currently reachable through the
+  app's own UI, which has no role-change form at all, but reachable at
+  the RLS layer directly, which is exactly what this rule guards
+  regardless of what any particular UI currently exposes).
+- Unposted-drafts warning: `setTeamMemberActive()` counts the target's
+  `journal_entries` with `status = 'draft'` before deactivating and
+  returns it as a non-fatal `warning`, not a blocking confirmation —
+  the request said "warn," and deactivation still proceeds; drafts
+  aren't touched (no edit/delete), just no longer editable by anyone
+  signed in as that now-inactive person.
+- "End active sessions... effective immediately": `getCurrentUser()`
+  already refuses a `!active` row on every request (proven since PR
+  A), so this is already true at the app layer regardless of anything
+  below. Additionally, best-effort, `setTeamMemberActive()` asks
+  Supabase Auth to ban the identity
+  (`admin.updateUserById(id, { ban_duration: "876000h" })` — GoTrue has
+  no dedicated "forever" value, this is the commonly-used ~100-year
+  stand-in) so an already-issued session token is rejected immediately
+  rather than merely on this app's next request. **Could not verify
+  this call's exact behavior live** — no real Supabase project
+  reachable from this environment — so a failure here is surfaced as a
+  warning, never treated as the deactivation itself failing; the
+  `active`-flag mechanism is the proven backstop either way. Please
+  confirm live that an already-signed-in deactivated user is actually
+  kicked out immediately, not just on their next navigation.
+
+**4. Audit log.** Add and deactivate/reactivate are both `users`
+INSERT/UPDATE — already covered by the `audit_users` trigger since PR
+A, no change needed (and `describeAuditEntry()` already renders
+"Account deactivated"/"Account reactivated" from an `active` before/
+after diff — built earlier, unused until now). Edit (assignment
+changes) had nothing logging it at all: `user_client_assignments` gets
+its own `audit_row_change()` trigger for the first time, matching
+every other RLS-protected table, plus a `"client assignment"` label in
+`lib/audit-log-labels.ts`.
+
+**Tests**: `db/__tests__/team-lifecycle-rls.test.ts` (new, 15 tests) —
+a dedicated fixture set/file rather than appending to
+`team-roles-rls.test.ts`, since this touches `users` UPDATE broadly
+enough that sharing that file's heavily-reused `OWNER_ID`/
+`BOOKKEEPER_ID` fixtures across ~40 unrelated tests risked one test's
+deactivation leaking into another's assumptions. Covers: Bookkeeper
+deactivate/reactivate scoped to their own Encoders (positive + 3
+negative cases: wrong client, zero assignments, non-Encoder target),
+Bookkeeper can't sneak another column change in alongside `active`,
+Owner self-protection, the lone-Owner role-change case above, Owner
+deactivating a *different* Owner (needs its own two-Owner firm
+fixture, kept separate so it never risks leaving the shared fixture
+firm without an active Owner), both `user_client_assignments`
+INSERT/DELETE now producing audit rows, plus direct calls into
+`editTeamMemberAssignments()`/`setTeamMemberActive()` for the
+app-layer messages (Bookkeeper-can't-edit-non-Encoder, add+remove
+diffed correctly, self-deactivation refused before touching the DB,
+the unposted-drafts warning).
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 200/200 (185 above +
+15 new), `pnpm build` clean. UI not manually driven in a browser in
+this environment (no way to run the dev server against a real
+Supabase project here) — reviewed by hand against the same
+`useActionState`/amber-warning conventions already established and
+proven on this page's existing add-member form.
+
+## Bug fix: Owner-invited Encoder with zero clients got "every client" access
+
+**The report**: an Owner invited an Encoder without ticking any client
+checkboxes, and the new Encoder showed up on the Team page with "Every
+client" access — full firm-wide visibility, for a role whose entire
+point is a narrow, assigned slice. Root cause in
+`createTeamMember()`'s `accessScope` computation:
+`role === "viewer" || clientIds.length > 0 ? "assigned" : "all"` only
+special-cased Viewer. An Owner-invited Encoder or Reviewer with zero
+clients ticked fell through to the `"all"` branch — the Bookkeeper's
+own invite form already required at least one client for its
+Encoders (`clientIds.length === 0` check, scoped to
+`currentUser.role === "bookkeeper"`), but that requirement never
+applied to an Owner's invite of the same role.
+
+**The rule, as given**: Encoder, Reviewer, and Viewer must always be
+`access_scope` `'assigned'`, never `'all'` — regardless of who's
+inviting. Only Owner and Bookkeeper may default to `'all'`. Encoder
+additionally requires at least one client picked at invite time
+(matching the Bookkeeper form's existing requirement, now applied
+uniformly instead of only when the inviter is a Bookkeeper); Reviewer
+and Viewer may start at zero clients and be assigned later, since
+neither needs to be immediately useful the moment it's created the
+way Encoder's whole point does.
+
+**`lib/auth/create-team-member.ts`**: the old
+`if (currentUser.role === "bookkeeper") { ... }` block's
+zero-clients-for-Encoder check is now unconditional on the inviter —
+`if (role === "encoder" && clientIds.length === 0)` fires regardless
+of who's inviting. `accessScope` is now
+`const canDefaultToAll = role === "firm_admin" || role === "bookkeeper"; const accessScope = canDefaultToAll && clientIds.length === 0 ? "all" : "assigned";`
+— only those two roles can ever land on `'all'`.
+
+**Enforced at the database level, not just in application code**
+(the actual ask — app-layer checks are a courtesy for a clean error
+message, not the backstop): `db/sql/013_role_access_scope_check.sql`
+adds `CHECK (NOT (role IN ('encoder', 'reviewer', 'viewer') AND access_scope = 'all'))`
+on `users`. A CHECK constraint, not a trigger — this is a stateless
+per-row invariant with no OLD/NEW column-diffing involved (unlike
+`enforce_reviewer_status_only_update` and friends), and it needs to
+apply universally, including to the owner/bypass Postgres connection
+used for admin operations — the opposite of RLS, which is
+intentionally role-scoped and bypassable by that same connection.
+`platform_admin` and `client_user` are deliberately excluded:
+`access_scope` isn't semantically meaningful for either (`platform_admin`
+has no firm at all; `client_user`'s access is its own `client_id`
+column, never `access_scope`/`user_client_assignments`), and neither
+was named in "Owner and Bookkeeper only."
+
+`ADD CONSTRAINT ... CHECK` validates every existing row by default, so
+the migration backfills first: (1) any existing encoder/reviewer/viewer
+row already sitting at `'all'` (from the bug above, wherever it's been
+hit) is corrected to `'assigned'`; (2) `encoder@keepbooks.demo`
+specifically — seeded with `'all'` deliberately, before this rule
+existed — is granted both seeded demo clients explicitly first, so
+fix #1 doesn't take it from "sees every demo client" to "sees nothing
+at all" as a side effect, matching what
+`scripts/seed-viewer-demo-user.ts` already did for the demo Viewer.
+
+**A second, closely-related bug caught while auditing `db/seed.ts`
+for the same issue**: the seeded `reviewer` row never set
+`accessScope` explicitly at all, relying on the column's own default
+(`'all'`) — which the new constraint now rejects outright. Since
+`db/seed.ts` runs *after* all migrations (so 013's one-time backfill,
+a migration-time-only UPDATE, never touches a row inserted later),
+this would have made a fresh `pnpm db:migrate && pnpm seed` crash on
+any new database. Fixed by setting `accessScope: "assigned"`
+explicitly on both the `reviewer` and `encoder` seed inserts, with
+matching `user_client_assignments` grants to both demo clients for
+each (previously only the Viewer got this treatment) — every demo
+account now has something to work with.
+
+**Team page copy** (`app/(app)/settings/team/page.tsx`): the old text
+— "Owner and Bookkeeper see every client by default unless you assign
+specific ones" — was inaccurate for Owner specifically.
+`app_accessible_client_ids()`'s `firm_admin` branch
+(`db/sql/001_functions_triggers_rls.sql`) has no `access_scope`
+condition at all: an Owner sees every client in the firm
+unconditionally, regardless of what `access_scope`/assignments say on
+their own row. Assigning an Owner specific clients would never
+actually narrow their access — the old copy implied otherwise.
+Rewritten to say Owner is always full access, a new Bookkeeper invite
+defaults to every client unless scoped down, and Encoder/Reviewer/
+Viewer are always limited to assigned clients (Encoder needing at
+least one picked now). The add-member form's client-picker label had
+the same bug in miniature — a single `isOwner`-only ternary claimed
+"leave blank for access to every client" for every role Owner could
+invite, which is now simply false for Encoder (rejected outright) and
+misleading for Reviewer/Viewer (sees nothing, not everything). Made
+role-aware: `"...leave blank for access to every client"` only for
+Bookkeeper, `"required"` for Encoder, `"optional — they'll see
+nothing until you assign at least one"` for Reviewer/Viewer.
+
+**Test fixture ripple**: the new constraint immediately exposed every
+place a test fixture relied on Encoder/Reviewer/Viewer being `'all'`
+(often as a stand-in for "sees every client in the firm," since
+`'all'` used to be the easy way to get that). Fixed in
+`team-roles-rls.test.ts`, `team-lifecycle-rls.test.ts`, and
+`create-team-member.test.ts`: switched those fixtures to `'assigned'`
+with explicit `user_client_assignments` grants to every client they
+previously saw implicitly, so downstream test assertions about "sees
+both clients" keep holding without being rewritten; repointed the one
+test that specifically demonstrates `'all'`-scope behavior
+(`"'all' scope sees every client in the firm"`) from an Encoder
+fixture to `BOOKKEEPER_ID`, the only non-Owner role left that can
+actually prove it; and switched three `create-team-member.test.ts`
+tests that used `role: "encoder", clientIds: []` purely to reach the
+*email-already-exists* branch over to `role: "viewer"` instead, since
+Encoder's new zero-clients rejection now fires before that check ever
+runs and those tests were never about Encoder's client requirement in
+the first place.
+
+**Verified**: `pnpm db:migrate` applies 013 cleanly against a
+database already carrying the pre-fix data (backfill + constraint,
+no manual intervention needed). `tsc --noEmit` and `pnpm build` both
+clean. `pnpm test`: all suites pass except two pre-existing failures
+in `team-roles-rls.test.ts` (`journal_entries`/`sales_invoices`
+Encoder-can't-see-another-encoder's-draft) that are unrelated to this
+fix — traced directly to this sandbox's local Postgres having a stray
+`journal_entries_select`/`sales_invoices_select` policy left over from
+separately testing PR #29 (`claude/encoder-transaction-visibility`,
+migration `013_encoder_read_all_client_entries.sql`) against the same
+shared database earlier in this session; confirmed via
+`pg_get_expr(polqual, ...)` that the live policy text lacks the
+`app_current_role() != 'encoder' OR created_by = app_current_user_id()`
+clause this branch's own `009_team_roles_rls.sql` defines, and
+`_sql_migrations_applied` shows `013_encoder_read_all_client_entries.sql`
+recorded as applied — a migration that does not exist anywhere in
+this branch's `db/sql/`. Restoring the correct policy locally needs a
+`DROP POLICY`/`CREATE POLICY` pair that this environment's safety
+tooling declined to run automatically; a database that has only ever
+run this branch's own migrations (any fresh `pnpm db:migrate`,
+including yours) was never exposed to that stray migration and won't
+show this failure.

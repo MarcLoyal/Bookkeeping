@@ -20,6 +20,7 @@ import {
   purchases,
   salesInvoices,
   taxRules,
+  userClientAssignments,
   users,
   withholdingTaxBrackets,
 } from "./schema";
@@ -98,6 +99,13 @@ async function main() {
       role: "bookkeeper",
     })
     .returning();
+  // accessScope: "assigned", NOT the column default ("all") — Reviewer
+  // and Encoder may never be 'all' (db/sql/013_role_access_scope_check.sql's
+  // CHECK constraint rejects it outright), so this can no longer rely on
+  // the column default the way admin/bookkeeper still do. Explicit
+  // user_client_assignments rows for both demo clients are inserted
+  // below, once they exist, so this demo account still has something to
+  // approve.
   const [reviewer] = await db
     .insert(users)
     .values({
@@ -106,6 +114,38 @@ async function main() {
       email: "reviewer@keepbooks.demo",
       name: "Rey Reviewer",
       role: "reviewer",
+      accessScope: "assigned",
+    })
+    .returning();
+  // accessScope: "assigned" — same reasoning as Reviewer above (Encoder
+  // may never be 'all' either). Explicit assignment rows below.
+  const [encoder] = await db
+    .insert(users)
+    .values({
+      id: crypto.randomUUID(),
+      firmId: firm.id,
+      email: "encoder@keepbooks.demo",
+      name: "Ellie Encoder",
+      role: "encoder",
+      accessScope: "assigned",
+    })
+    .returning();
+  // accessScope: "assigned", NOT "all" — Viewer always defaults to
+  // 'assigned' (see lib/auth/create-team-member.ts and
+  // db/schema/enums.ts's accessScopeEnum comment): a read-only role has
+  // no business defaulting to every client in the firm. Explicit
+  // user_client_assignments rows for both demo clients are inserted
+  // below, once they exist, so this demo account still has something to
+  // actually view.
+  const [viewer] = await db
+    .insert(users)
+    .values({
+      id: crypto.randomUUID(),
+      firmId: firm.id,
+      email: "viewer@keepbooks.demo",
+      name: "Vic Viewer",
+      role: "viewer",
+      accessScope: "assigned",
     })
     .returning();
 
@@ -164,6 +204,18 @@ async function main() {
     { clientId: servicesSoleProp.id, formCode: "1701Q", filingFrequency: "quarterly" },
   ]);
 
+  // Reviewer, Encoder, and Viewer are all accessScope: "assigned" (see
+  // above, and 013_role_access_scope_check.sql) — grant each both demo
+  // clients explicitly so every demo account has something to work with.
+  await db.insert(userClientAssignments).values([
+    { userId: reviewer.id, clientId: tradingCorp.id },
+    { userId: reviewer.id, clientId: servicesSoleProp.id },
+    { userId: encoder.id, clientId: tradingCorp.id },
+    { userId: encoder.id, clientId: servicesSoleProp.id },
+    { userId: viewer.id, clientId: tradingCorp.id },
+    { userId: viewer.id, clientId: servicesSoleProp.id },
+  ]);
+
   console.log("Seeding chart of accounts for both clients...");
   const tradingAccounts = await seedChartOfAccounts(tradingCorp.id);
   const servicesAccounts = await seedChartOfAccounts(servicesSoleProp.id);
@@ -195,6 +247,9 @@ async function main() {
   console.log(`  firm_admin  -> ${admin.email}`);
   console.log(`  bookkeeper  -> ${bookkeeper.email}`);
   console.log(`  reviewer    -> ${reviewer.email}`);
+  console.log(`  encoder     -> ${encoder.email}`);
+  console.log(`  viewer      -> ${viewer.email}`);
+  console.log("\nAll demo accounts (including these two) must be deleted before launch — see DECISIONS.md.");
 
   await client.end();
 }

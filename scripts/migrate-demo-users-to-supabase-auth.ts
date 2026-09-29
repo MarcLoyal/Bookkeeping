@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 
 /**
- * One-time script: creates the 3 demo accounts (seeded by db/seed.ts) as
+ * One-time script: creates the 5 demo accounts (seeded by db/seed.ts) as
  * real Supabase Auth users, then updates their public.users.id to match
  * (relying on ON UPDATE CASCADE — see db/sql/004_supabase_auth.sql — to
  * carry every reference along: user_client_assignments, audit_log,
@@ -26,6 +26,8 @@ const DEMO_USERS = [
   { email: "admin@keepbooks.demo", password: "password123" },
   { email: "bookkeeper@keepbooks.demo", password: "password123" },
   { email: "reviewer@keepbooks.demo", password: "password123" },
+  { email: "encoder@keepbooks.demo", password: "password123" },
+  { email: "viewer@keepbooks.demo", password: "password123" },
 ];
 
 async function main() {

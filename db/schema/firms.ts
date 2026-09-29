@@ -1,5 +1,5 @@
 import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { signupMethodEnum, userRoleEnum } from "./enums";
+import { accessScopeEnum, signupMethodEnum, userRoleEnum } from "./enums";
 import { clients } from "./clients";
 
 export const firms = pgTable("firms", {
@@ -25,6 +25,10 @@ export const users = pgTable(
     name: text("name").notNull(),
     role: userRoleEnum("role").notNull(),
     active: boolean("active").notNull().default(true),
+    // Default 'all' covers fresh inserts (new members going forward);
+    // 009's migration explicitly backfills every pre-existing row to
+    // 'assigned' — see enums.ts's accessScopeEnum doc comment for why.
+    accessScope: accessScopeEnum("access_scope").notNull().default("all"),
     // Set once at account creation for a firm's owner (email/password
     // signup vs. Google) — see db/schema/enums.ts's signupMethodEnum doc
     // comment. NULL for every other kind of row.

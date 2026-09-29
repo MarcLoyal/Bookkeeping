@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireCurrentUser } from "@/lib/auth/current-user";
+import { requireReportAccess } from "@/lib/auth/current-user";
 import { getClient, type ClientListRow } from "@/lib/data/clients";
 import { listJournalEntries, listLedgerLines } from "@/lib/data/journal";
 import { paginateJournalBook, paginateLedgerAccount, type JournalBookLine } from "@/lib/accounting/loose-leaf";
@@ -33,7 +33,7 @@ export default async function BookPage({
   params: Promise<{ id: string; book: string }>;
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
-  const user = await requireCurrentUser();
+  const user = await requireReportAccess();
   const { id, book } = await params;
   if (!BOOK_TITLES[book]) notFound();
 

@@ -9,7 +9,33 @@ export const userRoleEnum = pgEnum("user_role", [
   // this role (see db/schema/firms.ts). Created only via
   // scripts/create-platform-admin.ts, never through self-serve signup.
   "platform_admin",
+  // Added for Team & Roles (Phase 1): drafts only, own drafts only, no
+  // reports/dashboard/balances/exports — see db/sql/009_team_roles_rls.sql.
+  "encoder",
+  // Added alongside encoder: read-only across whatever it's scoped to
+  // (reports/dashboard), no create/edit/export.
+  "viewer",
 ]);
+
+// A staff member's default client visibility. 'all' = every client in the
+// firm (subject to role — see app_accessible_client_ids() in
+// db/sql/009_team_roles_rls.sql); 'assigned' = only clients explicitly
+// granted via user_client_assignments, even if that's currently none.
+// Deliberately NOT inferred from "has any assignment rows" — that would
+// silently widen access the moment someone's last assignment is removed,
+// or a plan downgrade takes away the ability to manage assignments. Every
+// firm_admin/bookkeeper/reviewer row that predates this column is
+// backfilled to 'assigned' by 009's migration, preserving exactly the
+// access they already had (assignment was mandatory before this column
+// existed) — new members default to 'all' going forward (set in
+// application code at invite-acceptance time, not by this column
+// default, which only covers rows inserted without specifying it, e.g.
+// dev seed scripts) — EXCEPT Viewer, which always defaults to
+// 'assigned' even with zero clients picked (see
+// lib/auth/create-team-member.ts): a read-only role has no business
+// defaulting to every client in the firm just because it can't write
+// anything.
+export const accessScopeEnum = pgEnum("access_scope", ["all", "assigned"]);
 
 export const taxpayerTypeEnum = pgEnum("taxpayer_type", [
   "individual",
