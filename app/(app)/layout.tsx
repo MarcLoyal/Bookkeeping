@@ -154,7 +154,31 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Every firm-staff role gets Recent Clients — platform_admin's "clients"
     // (the platform firms table) aren't per-client pages this layout ever
     // wraps, so there's nothing for getRecentClientsForUser() to reflect.
-    const recentClients = user.role === "platform_admin" ? undefined : await getRecentClientsForUser(user.id);
+    //
+    // Logged unconditionally (count, not just failures) for the same
+    // reason recordClientView() is (clients/[id]/layout.tsx) — an empty
+    // result and a swallowed error look identical from the outside
+    // otherwise. Caught rather than left to throw: this section failing
+    // to load is not a reason to fail the whole page (same reasoning as
+    // every other best-effort read in this app).
+    let recentClients: RecentClientRow[] | undefined;
+    if (user.role !== "platform_admin") {
+      try {
+        recentClients = await getRecentClientsForUser(user.id);
+        console.log("[AppLayout] getRecentClientsForUser", { userId: user.id, role: user.role, count: recentClients.length });
+      } catch (err) {
+        const pgErr = err as { code?: string; message?: string; detail?: string; hint?: string };
+        console.error("[AppLayout] getRecentClientsForUser failed", {
+          userId: user.id,
+          role: user.role,
+          code: pgErr?.code,
+          message: pgErr?.message,
+          detail: pgErr?.detail,
+          hint: pgErr?.hint,
+        });
+        recentClients = undefined;
+      }
+    }
     return (
       <SidebarShell user={user} navItems={navItems} recentClients={recentClients}>
         {children}

@@ -5,15 +5,22 @@ import postgres from "postgres";
 
 /**
  * Read-only-by-default diagnostic for the "Recent clients" sidebar feature
- * silently writing nothing on a real Supabase project. Prints what
- * MIGRATION_DATABASE_URL's role sees (table exists? RLS enabled? which
- * policies? what does information_schema say keepbooks_app is actually
- * granted?), then — the part a schema inspection alone can't tell you —
- * attempts one real INSERT through DATABASE_URL's keepbooks_app connection,
- * exactly the way recordClientView() does it (same set_config() call
- * app/(app)/clients/[id]/layout.tsx relies on), and prints the exact
- * Postgres error if it fails. Cleans up its own test row on success; never
- * touches a pre-existing one.
+ * on a real Supabase project. Prints what MIGRATION_DATABASE_URL's role
+ * sees (table exists? RLS enabled? which policies? what does information_
+ * schema say keepbooks_app is actually granted?), then — the part a schema
+ * inspection alone can't tell you — attempts one real INSERT and one real
+ * SELECT through DATABASE_URL's keepbooks_app connection, exactly the way
+ * recordClientView() / getRecentClientsForUser() do it (same set_config()
+ * call app/(app)/clients/[id]/layout.tsx and app/(app)/layout.tsx rely on),
+ * printing the exact Postgres error — or the exact row count — either
+ * step produces. Cleans up its own test row on success; never touches a
+ * pre-existing one.
+ *
+ * DATABASE_URL not in your .env.local? It's whatever your deployed app's
+ * DATABASE_URL environment variable is set to (check your hosting
+ * provider's project settings) — the app clearly connects with it
+ * successfully already, so copying that same value locally is safe and
+ * won't change anything live.
  *
  * Usage: pnpm tsx scripts/inspect-user-client-views-access.ts -- <email>
  *   <email> must belong to a firm_admin/bookkeeper/reviewer/encoder/viewer
@@ -113,6 +120,46 @@ async function main() {
   } catch (err) {
     const pgErr = err as { code?: string; message?: string; detail?: string; hint?: string };
     console.log("FAILED — this is the exact error the app itself hits (and was silently logging server-side):");
+    console.log(`  code:    ${pgErr.code ?? "(none)"}`);
+    console.log(`  message: ${pgErr.message ?? String(err)}`);
+    if (pgErr.detail) console.log(`  detail:  ${pgErr.detail}`);
+    if (pgErr.hint) console.log(`  hint:    ${pgErr.hint}`);
+  }
+
+  console.log("\n3. Live SELECT attempt — the sidebar's own query (via DATABASE_URL, as keepbooks_app)\n" + "=".repeat(50));
+  const [rawCount] = await adminSql<{ count: string }[]>`
+    select count(*)::text as count from user_client_views where user_id = ${user.id}
+  `;
+  console.log(`Rows for this user via MIGRATION_DATABASE_URL (bypasses RLS, ground truth): ${rawCount.count}`);
+
+  try {
+    const rows = await appSql.begin(async (tx) => {
+      await tx`select set_config('app.current_user_id', ${user.id}, true)`;
+      return tx<{ id: string; name: string }[]>`
+        select c.id, c.registered_name as name
+        from user_client_views ucv
+        inner join clients c on ucv.client_id = c.id
+        where ucv.user_id = ${user.id}
+        order by ucv.last_viewed_at desc
+        limit 5
+      `;
+    });
+    console.log(`Rows returned via keepbooks_app + RLS (what the sidebar actually sees): ${rows.length}`);
+    if (rows.length > 0) {
+      console.log("SUCCESS — matches: " + rows.map((r) => r.name).join(", "));
+    } else if (Number(rawCount.count) > 0) {
+      console.log(
+        "MISMATCH — ground truth has rows but keepbooks_app's RLS-scoped read sees none. This is the real bug: either " +
+          "the SELECT grant is missing/different from the write grants, or the RLS policy's USING clause isn't matching " +
+          "for some reason not yet identified. Worth checking `select grantee, privilege_type from information_schema." +
+          "role_table_grants where table_name = 'clients' and grantee = 'keepbooks_app'` too — the INNER JOIN also needs " +
+          "keepbooks_app to be able to SELECT from `clients`, which is a much older, previously-proven-working grant, but " +
+          "worth ruling out explicitly rather than assumed."
+      );
+    }
+  } catch (err) {
+    const pgErr = err as { code?: string; message?: string; detail?: string; hint?: string };
+    console.log("FAILED — the sidebar's read itself errors:");
     console.log(`  code:    ${pgErr.code ?? "(none)"}`);
     console.log(`  message: ${pgErr.message ?? String(err)}`);
     if (pgErr.detail) console.log(`  detail:  ${pgErr.detail}`);

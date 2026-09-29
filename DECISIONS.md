@@ -3309,3 +3309,53 @@ deliberately revoked first.
 confirm clean) is the actual proof this fix works, not just that it
 applies without SQL errors. `pnpm test` 232/232, `tsc --noEmit` and
 `pnpm build` both clean.
+
+## Follow-up: writes now work, reads still show nothing — still open
+
+The 016 grant fix above resolved the write side: on the real project,
+`user_client_views` now has real rows (confirmed directly by the
+user for both an Owner and an Encoder, both against the same client).
+The sidebar's Recent Clients section still doesn't render for either
+role, even after a genuine hard refresh on `/dashboard`.
+
+Extensive code review found no bug: `getRecentClientsForUser()`'s
+query is proven correct by a dedicated passing test
+(`db/__tests__/user-client-views.test.ts`) that calls the exact same
+function against the exact same RLS policy; the `clients` table join
+target has a long-proven-working SELECT grant (every other client-
+data read in this app depends on it); `app/(app)/layout.tsx` awaits
+the call correctly and isn't shadowed by any other layout; no route-
+segment caching config (PPR, `fetchCache`, `revalidate`) is set
+anywhere in this tree; `db/client.ts`'s connection already sets
+`prepare: false` against exactly the pooler-staleness failure mode
+this app has hit once before (see `db/migrate.ts`'s own comment on
+the same issue). Every one of these was suspected and ruled out
+directly, not assumed.
+
+Since this sandbox has no credentials for the real project and can't
+reproduce a live-only symptom directly, two things shipped to
+narrow it down with the next real test instead of more theorizing:
+
+- `app/(app)/layout.tsx`: the read is now wrapped the same way the
+  write already was — logs the row count unconditionally, and logs
+  full Postgres error detail if it throws (previously it wasn't even
+  wrapped in `try`/`catch` at all, so a throw here would have failed
+  the whole page rather than just the sidebar section — worth ruling
+  out explicitly too, even though the reported symptom, a page that
+  otherwise renders fine, argues against it already).
+- `scripts/inspect-user-client-views-access.ts`: extended with a
+  third check — a live `SELECT` through `DATABASE_URL` as
+  `keepbooks_app`, running the sidebar's exact query (same
+  `set_config()` pattern), compared directly against the row count
+  `MIGRATION_DATABASE_URL` sees (ground truth, bypasses RLS). A
+  mismatch between the two would be the smoking gun; verified
+  locally that the script correctly reports both a real 0-row case
+  and a real matching-row case. Needs `DATABASE_URL` locally to run,
+  which the user doesn't currently have set — pointed them at their
+  hosting provider's environment variables as the source (the
+  deployed app is clearly already using it correctly for the write
+  side, so it's known-good to copy).
+
+**Verified**: `pnpm test` 232/232, `tsc --noEmit` and `pnpm build`
+both clean. The diagnostic script's new step 3 confirmed correct
+locally against both a populated and an empty table.
