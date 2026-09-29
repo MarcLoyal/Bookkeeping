@@ -48,6 +48,7 @@ const ENCODER_B_ID = "00000000-0000-4000-9100-000000000014"; // access_scope 'al
 const VIEWER_ID = "00000000-0000-4000-9100-000000000015";
 const ASSIGNED_ENCODER_ID = "00000000-0000-4000-9100-000000000016"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
 const UNASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000017"; // access_scope 'assigned', zero grants
+const ASSIGNED_BOOKKEEPER_ID = "00000000-0000-4000-9100-000000000018"; // access_scope 'assigned', granted only CLIENT_ASSIGNED_ID
 
 let assetAccountId: string;
 let liabilityAccountId: string;
@@ -92,10 +93,14 @@ beforeAll(async () => {
   await upsertUser(VIEWER_ID, "rls-viewer@test.local", "viewer", "all");
   await upsertUser(ASSIGNED_ENCODER_ID, "rls-assigned-encoder@test.local", "encoder", "assigned");
   await upsertUser(UNASSIGNED_BOOKKEEPER_ID, "rls-unassigned-bookkeeper@test.local", "bookkeeper", "assigned");
+  await upsertUser(ASSIGNED_BOOKKEEPER_ID, "rls-assigned-bookkeeper@test.local", "bookkeeper", "assigned");
 
   await ownerDb
     .insert(schema.userClientAssignments)
-    .values({ userId: ASSIGNED_ENCODER_ID, clientId: CLIENT_ASSIGNED_ID })
+    .values([
+      { userId: ASSIGNED_ENCODER_ID, clientId: CLIENT_ASSIGNED_ID },
+      { userId: ASSIGNED_BOOKKEEPER_ID, clientId: CLIENT_ASSIGNED_ID },
+    ])
     .onConflictDoNothing();
 
   const existingAccounts = await ownerDb.select().from(schema.accounts).where(eq(schema.accounts.clientId, CLIENT_ASSIGNED_ID));
@@ -244,6 +249,71 @@ describe("clients: create/edit", () => {
         if (row.tradeName === "Hacked") throw new Error("viewer's UPDATE silently succeeded — RLS did not block it");
       })
     ).resolves.toBeUndefined(); // UPDATE against 0 matching rows doesn't throw — the assertion above is the real check
+  });
+
+  it("'assigned'-scope Bookkeeper CAN edit a client they're assigned to", async () => {
+    await withUserContext(ASSIGNED_BOOKKEEPER_ID, (tx) =>
+      tx.update(schema.clients).set({ tradeName: "Edited by assigned bookkeeper" }).where(eq(schema.clients.id, CLIENT_ASSIGNED_ID))
+    );
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, CLIENT_ASSIGNED_ID));
+    expect(row.tradeName).toBe("Edited by assigned bookkeeper");
+    await ownerDb.update(schema.clients).set({ tradeName: null }).where(eq(schema.clients.id, CLIENT_ASSIGNED_ID));
+  });
+
+  it("'assigned'-scope Bookkeeper CANNOT edit a client outside their assignment — not just any bookkeeper editing any firm client", async () => {
+    await withUserContext(ASSIGNED_BOOKKEEPER_ID, (tx) =>
+      tx.update(schema.clients).set({ tradeName: "Should not apply" }).where(eq(schema.clients.id, CLIENT_UNASSIGNED_ID))
+    );
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, CLIENT_UNASSIGNED_ID));
+    expect(row.tradeName).not.toBe("Should not apply");
+  });
+
+  it("'all'-scope Bookkeeper CAN edit any firm client (their read scope and write scope match)", async () => {
+    await withUserContext(BOOKKEEPER_ID, (tx) =>
+      tx.update(schema.clients).set({ tradeName: "Edited by all-scope bookkeeper" }).where(eq(schema.clients.id, CLIENT_UNASSIGNED_ID))
+    );
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, CLIENT_UNASSIGNED_ID));
+    expect(row.tradeName).toBe("Edited by all-scope bookkeeper");
+    await ownerDb.update(schema.clients).set({ tradeName: null }).where(eq(schema.clients.id, CLIENT_UNASSIGNED_ID));
+  });
+});
+
+describe("clients: delete stays Owner-only", () => {
+  // A fresh, dependent-free client for each test — journal_entries.client_id
+  // is ON DELETE RESTRICT, so CLIENT_ASSIGNED_ID/CLIENT_UNASSIGNED_ID (both
+  // carry accounts/contacts/journal entries from other tests) could never
+  // actually be deleted regardless of RLS; a real DELETE test needs a
+  // client nothing else references.
+  async function seedDeletableClient(suffix: string): Promise<string> {
+    const id = crypto.randomUUID();
+    await ownerDb.insert(schema.clients).values({
+      id,
+      firmId: FIRM_ID,
+      registeredName: `RLS Delete-Test Co. ${suffix}`,
+      tin: "444-444-444-00000",
+      rdoCode: "000",
+      taxpayerType: "corporation",
+      vatStatus: "vat",
+      incomeTaxRegime: "rcit",
+      address: "Test",
+      status: "active",
+    });
+    return id;
+  }
+
+  it("Bookkeeper CANNOT delete a client, even one they can edit", async () => {
+    const id = await seedDeletableClient("bookkeeper-attempt");
+    await withUserContext(BOOKKEEPER_ID, (tx) => tx.delete(schema.clients).where(eq(schema.clients.id, id)));
+    const [row] = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, id));
+    expect(row).toBeDefined(); // still there — RLS silently matched 0 rows for the DELETE
+    await ownerDb.delete(schema.clients).where(eq(schema.clients.id, id));
+  });
+
+  it("Owner (firm_admin) CAN delete a client", async () => {
+    const id = await seedDeletableClient("owner-attempt");
+    await withUserContext(OWNER_ID, (tx) => tx.delete(schema.clients).where(eq(schema.clients.id, id)));
+    const rows = await ownerDb.select().from(schema.clients).where(eq(schema.clients.id, id));
+    expect(rows).toHaveLength(0);
   });
 });
 

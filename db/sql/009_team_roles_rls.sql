@@ -151,7 +151,18 @@ BEFORE UPDATE ON journal_entries
 FOR EACH ROW EXECUTE FUNCTION enforce_reviewer_status_only_update();
 
 -- ----------------------------------------------------------------------------
--- 3. clients — bookkeeper can now create; edit stays structural-only.
+-- 3. clients — bookkeeper can now create and edit (edit already scoped
+-- through app_accessible_client_ids(), same as reads — an 'assigned'-
+-- scope bookkeeper can only edit clients they're actually assigned to,
+-- never every client in the firm; an 'all'-scope one edits whatever they
+-- can already see, matching read/write parity everywhere else in this
+-- file). Delete stays Owner-only — see the new clients_delete policy
+-- below, which didn't exist at all before this: no DELETE policy on
+-- `clients` meant Postgres denied it to every role, Owner included, not
+-- specifically "Owner-only" as intended. Nothing in the app currently
+-- calls a client delete (no UI, no API route, no data-layer function),
+-- so this closes the gap defensively rather than changing any live
+-- behavior.
 -- ----------------------------------------------------------------------------
 DROP POLICY clients_insert ON clients;
 CREATE POLICY clients_insert ON clients FOR INSERT
@@ -160,6 +171,9 @@ CREATE POLICY clients_insert ON clients FOR INSERT
 DROP POLICY clients_update ON clients;
 CREATE POLICY clients_update ON clients FOR UPDATE
   USING (app_can_manage_structure() AND id IN (SELECT app_accessible_client_ids()));
+
+CREATE POLICY clients_delete ON clients FOR DELETE
+  USING (app_current_role() = 'firm_admin' AND id IN (SELECT app_accessible_client_ids()));
 
 -- ----------------------------------------------------------------------------
 -- 4. client_tax_types / accounts / contacts — structural, Owner+Bookkeeper only.

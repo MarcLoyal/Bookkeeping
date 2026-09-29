@@ -1924,6 +1924,40 @@ client record seemed like an impractical, likely-unintended reading —
 but this one wasn't explicitly asked for, unlike the other two. Easy to
 narrow back to `firm_admin`-only if that reading's wrong.
 
+**Follow-up, confirmed after review**: keep Bookkeeper edit access, but
+verify two things and add tests. Checked both against the actual SQL
+rather than assuming:
+
+1. **Bookkeeper edit is already scoped by `access_scope`, not "every
+   client in the firm."** `clients_update`'s `USING` clause was already
+   `id IN (SELECT app_accessible_client_ids())` — the same
+   scope-respecting function every read already goes through, not a
+   broader `firm_id = app_current_firm_id()` check. An `'assigned'`-scope
+   Bookkeeper genuinely can only edit clients they're assigned to; an
+   `'all'`-scope one edits whatever they can already see. This was
+   already correct by construction (write scope was always meant to
+   mirror read scope), just not yet asserted by a test — added three:
+   assigned-scope edit succeeds on the assigned client, fails on an
+   unassigned one, and an all-scope Bookkeeper can edit anything in the
+   firm.
+2. **Delete was NOT actually Owner-only — it was no-one-only.** No
+   `clients_delete` policy existed anywhere (001 never added one, and
+   009 didn't either). Postgres RLS denies a command outright when no
+   policy grants it, for every role including Owner — so "delete stays
+   Owner-only" wasn't yet true; nobody could delete a client via the app
+   role at all. Added `clients_delete` (firm_admin-only, same
+   `app_accessible_client_ids()` scoping as everything else) — this is
+   purely defensive: no UI, API route, or data-layer function anywhere
+   in the app currently calls a client delete, so this changes no live
+   behavior today, it just makes the intended rule actually enforceable
+   the moment such a feature exists. Two tests added: Bookkeeper's
+   DELETE silently matches zero rows (RLS, not an app-level check);
+   Owner's DELETE succeeds against a client fixture built specifically
+   dependent-free for the test (`journal_entries.client_id` is `ON
+   DELETE RESTRICT`, so the suite's normal fixture clients — which carry
+   accounts/contacts/entries from other tests — could never actually be
+   deleted regardless of RLS).
+
 Encoder and Viewer are new roles, built fresh — no reconciliation needed.
 
 ### Per-client access: `access_scope`, not an inferred default
@@ -2072,7 +2106,7 @@ Supabase Auth identities the same way. **All five demo accounts
 (including these two) must be deleted before launch** — flagged here,
 in `db/seed.ts`'s own completion log, and in README.md.
 
-`db/__tests__/team-roles-rls.test.ts` — 27 tests against the real
+`db/__tests__/team-roles-rls.test.ts` — 32 tests against the real
 `keepbooks_app` RLS-enforcing role (same pattern as `acceptance.test.ts`):
 `access_scope` visibility (all/assigned/zero-assignment/Owner-always-
 sees-everything), the Bookkeeper client-creation fix, Encoder's full
@@ -2080,7 +2114,11 @@ add/edit/delete-own + can't-see-others'/can't-post matrix, Reviewer's
 post-only + can't-sneak-a-field-change-in-alongside-a-status-change,
 Viewer's read-only, Bookkeeper's unchanged full access, and
 `sales_invoices` as a representative sample of the four document tables
-(same policy pattern, not independently retested four times). Writing
+(same policy pattern, not independently retested four times). Also
+covers the client edit/delete follow-up below: `'assigned'`-scope
+Bookkeeper can edit an assigned client but not one outside their
+assignment, `'all'`-scope Bookkeeper can edit any firm client, and
+Bookkeeper cannot delete a client (Owner can). Writing
 these tests caught a real, unrelated test-isolation bug: adding new
 `firm_admin`-role fixture rows exposed that `db/__tests__/payroll.test.ts`'s
 own admin lookup (`WHERE role = 'firm_admin' LIMIT 1`, no firm filter,
@@ -2094,8 +2132,8 @@ team page don't exist yet): the last-Owner rule, invite expiry/
 revocation, Google-invite email matching. PR B gets its own test file
 for those.
 
-**Verified**: `tsc --noEmit`, `pnpm test` (165 tests — 138 pre-existing
-+ 27 new, all passing against the real local Postgres), `pnpm build`
+**Verified**: `tsc --noEmit`, `pnpm test` (170 tests — 138 pre-existing
++ 32 new, all passing against the real local Postgres), `pnpm build`
 all clean.
 
 ## Known non-blocking follow-ups

@@ -142,6 +142,11 @@ DROP POLICY IF EXISTS clients_update ON clients;
 CREATE POLICY clients_update ON clients FOR UPDATE
   USING (app_is_staff() AND id IN (SELECT app_accessible_client_ids()));
 
+-- clients_delete didn't exist pre-009 at all (no DELETE policy meant
+-- Postgres denied it outright to every role) — just drop it, nothing to
+-- restore it to.
+DROP POLICY IF EXISTS clients_delete ON clients;
+
 -- 2. Reviewer status-only trigger
 DROP TRIGGER IF EXISTS journal_entries_reviewer_status_only ON journal_entries;
 DROP FUNCTION IF EXISTS enforce_reviewer_status_only_update();
