@@ -77,6 +77,7 @@ export default async function TransactionsPage({
               <th className="px-4 py-3">Reference</th>
               <th className="px-4 py-3 text-right">Amount</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Entered by</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -97,12 +98,13 @@ export default async function TransactionsPage({
                   <td className="px-4 py-3">
                     <StatusBadge status={e.status} />
                   </td>
+                  <td className="px-4 py-3 text-slate-600">{e.enteredByName ?? "—"}</td>
                 </tr>
               );
             })}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                   No transactions yet.
                 </td>
               </tr>

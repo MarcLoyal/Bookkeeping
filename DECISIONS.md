@@ -2889,3 +2889,87 @@ tooling declined to run automatically; a database that has only ever
 run this branch's own migrations (any fresh `pnpm db:migrate`,
 including yours) was never exposed to that stray migration and won't
 show this failure.
+
+## Encoder transaction visibility: read all entries on assigned clients
+
+**New branch/PR, not #28**, as asked — `claude/encoder-transaction-visibility`,
+originally branched from #28's tip since the role model, `access_scope`,
+and the RLS scaffolding this depends on (`app_accessible_client_ids()`,
+the Encoder role itself) only existed there at the time — `main` had
+none of Team & Roles yet. Now that #28 has merged, this branch has
+been rebased onto `main` directly, and its migration renumbered from
+`013_encoder_read_all_client_entries.sql` to
+`014_encoder_read_all_client_entries.sql` (013 was taken by #28's own
+`013_role_access_scope_check.sql`, merged first).
+
+**What an Encoder could see before this, asked directly**: only
+entries *they personally created* — not another Encoder's drafts, not
+the Bookkeeper's drafts, and, more surprisingly, not even a **posted**
+entry created by someone else. 009's `journal_entries_select` policy
+(and the identical pattern on `journal_lines` and all four document
+tables) filtered by `created_by = app_current_user_id()`
+unconditionally for the Encoder role, with no exception once an entry
+posted. That's a stricter read scope than "can't approve/edit others'
+work" (correct, and unchanged by this PR) — it was "can't even see
+others' work exists," which is what actually created the duplicate-
+encoding risk: nothing on screen would tell a second Encoder someone
+already keyed the same transaction.
+
+**Fix**: `db/sql/014_encoder_read_all_client_entries.sql` drops that
+clause from all 8 SELECT policies (`journal_entries`, `journal_lines`,
+`sales_invoices`, `purchases`, `cash_receipts`, `cash_receipt_lines`,
+`cash_disbursements`, `cash_disbursement_lines`), leaving only the
+`client_id IN app_accessible_client_ids()` check every other role's
+SELECT already had — Encoder's read scope now matches
+Bookkeeper/Reviewer/Viewer/Owner exactly. Every INSERT/UPDATE/DELETE
+policy is untouched: Encoder can still only write their own draft,
+proven by the same tests as before (now restated under this
+migration's own describe block in `team-roles-rls.test.ts`, plus two
+new ones: seeing a Bookkeeper's draft, and seeing — but not editing —
+a posted entry from someone else).
+
+**UI**: `listJournalEntries()`/`getJournalEntry()`
+(`lib/data/journal.ts`) now also resolve each entry's creator name
+(`enteredByName`, via a `users` lookup scoped by the caller's own
+`users_select` visibility — same-firm, so this resolves for anyone's
+entries, not just the viewer's own) — shown as a new "Entered by"
+column on the transactions list and inline on the entry detail page.
+Status was already shown on both (`StatusBadge` on the list,
+capitalized text on the detail page) — nothing to add there.
+
+**Duplicate warning** ("also consider adding"): scoped to the General
+Journal creation path only — both `createDraftGeneralJournal()` (the
+Encoder's own path) and `postGeneralJournal()` — not the four other
+document-type creation flows, which each have their own separate forms
+and would need their own separate wiring; flagged as a follow-up if
+wanted, not built here. `findPossibleDuplicateGeneralJournalEntry()`
+(`lib/data/journal.ts`) matches on client + date + reference number +
+total debit amount, and — deliberately — only runs the check at all
+when a reference number is actually given: without one, "same date +
+amount" alone is far too common a coincidence to mean anything (two
+unrelated cash entries on the same day for a round number), and would
+just be noise. New route
+`POST /api/clients/[id]/transactions/general-journal/check-duplicate`
+is called by `GeneralJournalForm` *before* the real save/post request,
+non-blocking — a match surfaces a `window.confirm()` naming the
+existing entry's number/status/creator; declining aborts the submit,
+confirming proceeds exactly as before. This is exactly the check that
+needed the read-scope widening above to be useful at all: catching a
+second Encoder (or the Bookkeeper) re-keying something already
+entered requires being able to see across who entered what in the
+first place.
+
+**Tests**: `db/__tests__/duplicate-entry-detection.test.ts` (new, 5
+tests) — match found, no match on differing reference/amount, and the
+reference-number-required gate, using the real
+`createDraftGeneralJournal()` write path rather than hand-inserted
+fixture rows so the test exercises the same code the form actually
+calls.
+
+**Verified**: `tsc --noEmit` clean, `pnpm test` 209/209 (200 above + 4
+in `team-roles-rls.test.ts`'s new describe block + 5 in the new
+duplicate-detection file — one of the 4 restates an existing test
+under the new migration's block rather than adding net-new coverage),
+`pnpm build` clean (confirmed the new `check-duplicate` route is in
+the build output). UI not manually driven in a browser in this
+environment, same limitation as noted above.
