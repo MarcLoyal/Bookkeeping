@@ -60,6 +60,15 @@ export default async function LoginPage({
             Create your firm
           </Link>
         </p>
+        <p className="mt-4 text-center text-xs text-slate-400">
+          <Link href="/pricing" className="hover:text-slate-600 hover:underline">
+            Pricing
+          </Link>
+          {" · "}
+          <Link href="/faq" className="hover:text-slate-600 hover:underline">
+            FAQ
+          </Link>
+        </p>
       </div>
     </div>
   );

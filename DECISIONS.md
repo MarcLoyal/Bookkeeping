@@ -4135,3 +4135,293 @@ take it further. `tsc --noEmit` and `pnpm build` both clean with this
 file added; `pnpm test` unaffected (308/308) — this script has no test
 of its own, since its whole job is exercising the real network path
 `lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.
+
+## Public Pricing and FAQ pages
+
+Informational/marketing pages only — no billing, no payment logic, no
+schema changes. Built against `main` as it stands today, deliberately
+independent of the still-unmerged AI receipt-capture fair-use-cap PR
+(`claude/receipt-capture-ui`): neither page mentions AI receipt capture
+or its scan cap, since advertising a feature that isn't live in
+production yet would be worse than leaving it out until it ships. If
+that PR merges first, revisit whether to add it back in as a
+differentiator.
+
+**Placeholder numbers — flagged here and in the PR description, not
+just in code comments**: every monthly ₱ price
+(`lib/marketing/pricing-config.ts`'s `monthlyPricePhp: 1499` on Basic,
+`3499` on Premium) and the referral discount
+(`REFERRAL_PROGRAM.discountPercent: 20`) are placeholders you asked to
+finalize later. Enterprise deliberately has no numeric price at all
+(`monthlyPricePhp: null` → renders as "Custom") — it's positioned as a
+contact-sales tier for large corporations, per spec, not a fourth
+placeholder number to guess at.
+
+**Everything else in the config is real, not invented**: client counts,
+seat counts, and the per-client-assignment feature are read directly off
+`lib/billing/plan-limits.ts`'s `PLAN_DEFAULTS` — the exact same numbers
+already enforced by `db/sql/018_plan_limits.sql`'s triggers the moment a
+firm signs up onto a plan. A marketing page promising a different limit
+than what the product actually enforces would be worse than no page at
+all, so Basic/Premium's "up to N clients" and "N user seats" can never
+drift from reality on their own — only `PLAN_DEFAULTS` itself, or the
+price, would need updating. Premium's "assign specific bookkeepers to
+specific clients" bullet is the real `perClientAssignmentAllowed` gate
+(`enforce_per_client_assignment_allowed()`, `018_plan_limits.sql`), not
+invented marketing copy.
+
+**No design system to reuse, so the visual language was reverse-engineered
+from the two existing public pages**: `app/page.tsx` redirects
+immediately to `/login` or `/dashboard` — there is no existing marketing
+site or main nav to hook "where a Pricing/FAQ link would normally live"
+into. `app/login/page.tsx`/`app/signup/page.tsx` (slate palette, "K"
+wordmark, rounded-xl white cards) and `app/(app)/layout.tsx`'s
+authenticated topbar (Keep.Books wordmark, `max-w-7xl`/`max-w-6xl`
+containers, `border-slate-200`) are the only two visual references that
+exist, so the new `app/(marketing)/layout.tsx` shared header/footer
+reuses both directly rather than inventing a third look. Login and
+signup gained a small "Pricing · FAQ" link row under their existing
+"Create your firm"/"Sign in" line — the closest thing this app has to
+"where the main nav/footer would normally live," since neither page has
+a footer of its own to extend.
+
+**Route group, not top-level pages**: `app/(marketing)/pricing/page.tsx`
+and `app/(marketing)/faq/page.tsx` share `app/(marketing)/layout.tsx` via
+a route group, the same convention `app/(app)/` already uses for the
+authenticated shell — one header/footer definition, not copy-pasted into
+both pages.
+
+**`middleware.ts`**: `/pricing` and `/faq` added to `PUBLIC_PATHS`.
+Without this, an unauthenticated visitor hitting either page would be
+redirected straight to `/login` — the whole point of a public pricing/
+FAQ page is that you can read it before signing up.
+
+**FAQ answers, checked against real RLS/access behavior, not just
+"reassuring-sounding"**: "Who can see my files" is answered from
+`db/sql/007_platform_admin_dashboard.sql`'s own comment ("no SELECT
+policy for clients or audit_log for platform_admin exists at all") —
+the platform admin can see a firm's name/plan/owner for billing and
+support, never client financial data, and that's a real, checked
+constraint, not a promise. "What happens after my 7-day trial ends?" is
+phrased around the actual current flow (a dashboard notice, then a
+manual move to Free that makes older clients read-only rather than
+deleting anything) rather than implying an automated billing cutoff that
+doesn't exist yet. "Can I upgrade or downgrade later?" says plainly that
+switching plans today means reaching out — `setFirmPlan()` is a platform
+admin action (`/settings/platform-admins/trials`), not yet a self-serve
+button in the Owner's own dashboard — rather than implying a self-serve
+flow that isn't built.
+
+**FAQ as data, not JSX**: `lib/marketing/faq-content.ts` exports a plain
+`FaqItem[]`, rendered with native `<details>`/`<summary>` (Tailwind's
+`group-open:` variant rotates the chevron) — no client component or JS
+needed for the accordion. The referral-discount answer pulls
+`REFERRAL_PROGRAM.description` directly from `pricing-config.ts` rather
+than restating the number, so the two pages can't quote different
+percentages if it's ever updated.
+
+**Verified**: `pnpm test` 308/308 (unchanged — no new data/business
+logic, nothing to unit test here), `tsc --noEmit` and `pnpm build` both
+clean (`/pricing` and `/faq` both appear in the route list). The actual
+`next dev` server could not be started in this sandbox at all —
+`middleware.ts` unconditionally requires real
+`NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` on every request (including these
+two now-public pages), and this sandbox has neither configured, the same
+pre-existing limitation documented across the Supabase Auth migration
+and AI receipt-capture PRs. This blocks every page in the app from
+running here, not something introduced by this change. As a substitute,
+both page components were rendered directly with `react-dom/server`
+(bypassing the auth-dependent shared layout, which can't be exercised
+without live Supabase) — confirmed both render without throwing, all
+three pricing tiers and all 8 FAQ questions appear in the output, and the
+referral/trial copy resolves correctly. The full page, including the
+header's logged-in/logged-out nav state, still needs a real browser
+check once you have Supabase credentials available — same category of
+"needs your own environment to verify" as this whole multi-tenancy
+effort's other PRs.
+
+Opened as a **draft PR, not merged** — per your explicit instruction
+("a real client is currently using production... this stays pending
+until I review and approve it manually").
+
+### Pricing update: Basic ₱2,499/mo, Premium ₱7,999/mo
+
+Revised `lib/marketing/pricing-config.ts`'s two placeholder prices
+(Basic ₱1,499 → ₱2,499, Premium ₱3,499 → ₱7,999) per your explicit
+numbers — Enterprise's "Custom" and the 20% referral discount are
+unchanged. Confirmed the new numbers are the single place they live:
+grepped the whole `app/`/`lib/` tree for the old figures (`1499`,
+`3499`) and found no other reference to update, then rendered
+`PricingPage` directly to confirm `₱2,499`/`₱7,999` appear and the old
+figures don't. `PLAN_DEFAULTS` itself (client/seat counts) is
+untouched — the price fields on `PRICING_TIERS` were always a separate,
+hand-set number from those, never derived from `PLAN_DEFAULTS`, so
+there was nothing else to "propagate." `pnpm test` 308/308, `tsc
+--noEmit` and `pnpm build` both clean. Still a draft PR, not merged —
+same pending-your-approval status as before.
+
+### In-app links to Pricing and FAQ
+
+Two small links added to `app/(app)/layout.tsx`'s `SidebarShell`, in a
+new footer block below the main nav (`border-t`, same visual treatment
+as the "Recent clients" section above it) — the only existing
+"account/firm info area" this sidebar has.
+
+**"Upgrade Plan" (→ `/pricing`) is Owner-only** (`user.role ===
+"firm_admin"`), not shown to every sidebar role. Matches every other
+billing-adjacent affordance already in this sidebar/layout —
+`PlanStatusBanner` is firm_admin-only, `setFirmPlan()` is a platform-
+admin action taken *on behalf of* a firm's Owner, and Bookkeeper/
+Reviewer/Encoder/Viewer have no reason to manage the firm's plan.
+`platform_admin` is excluded too — they administer the platform, not a
+customer firm, so there's no plan of their own to upgrade.
+
+**"Help / FAQ" (→ `/faq`) shows for every sidebar role**, including
+`platform_admin` — no reason to restrict it, and it's the only way a
+logged-in user could reach the FAQ without logging out first (the
+public `/faq` link previously only lived on `/login`/`/signup`).
+
+**Confirmed no redirect loop or broken layout for a logged-in user
+visiting either page** — traced through both request paths rather than
+assuming:
+- `middleware.ts`: `/pricing` and `/faq` are in `PUBLIC_PATHS`, so the
+  `!user && !isPublic` redirect-to-login check is `false` regardless of
+  auth state — a logged-in user's request passes through untouched.
+- `app/(marketing)/layout.tsx`: no `redirect()` call at all, for either
+  auth state — it's a route-group sibling of `app/(app)/`, not nested
+  inside it, so navigating there from the sidebar swaps to the public
+  header/footer shell (no sidebar), the same page a logged-out visitor
+  sees, just with "Go to Dashboard" instead of "Log in"/"Start free
+  trial" in the header.
+
+**Bug caught while confirming this, not assumed away**: the
+marketing footer's nav only ever showed "Log in"/"Create your firm" —
+unlike the header right above it, it never branched on `user`. A
+logged-in Owner clicking "Upgrade Plan" would have landed on a page
+whose footer told them to log in, while its header correctly said "Go
+to Dashboard." Fixed by giving the footer the same `user ? ... : ...`
+branch the header already had, rather than leaving a second, silently
+inconsistent copy of the same logic. Confirmed this is the only such
+duplication in the file — the header's branch is the only other place
+this decision is made.
+
+**Verified**: `pnpm test` 308/308 (unchanged — pure layout/copy, no new
+logic), `tsc --noEmit` and `pnpm build` both clean. `SidebarShell` isn't
+exported (it's a private function inside the layout file, same as
+every other role-gated block already in it), so this was checked by
+direct code reading plus the compiler's own JSX/type checking, the same
+level of confidence every other change to this specific function has
+relied on historically — not by an isolated component render like the
+Pricing/FAQ pages themselves got, since faking a real authenticated
+request here would need a live Postgres-backed session, not just a
+plain React render.
+
+**Placement moved, same PR**: relocated from the sidebar footer block
+(above) to the header row, next to "Welcome, {name} · {role}" and
+`SignOutButton` — the sidebar footer block was removed entirely rather
+than left as dead code. Relabeled "Upgrade Plan" → "Pricing" for the
+tighter header context (matches the literal link name, still points to
+`/pricing`, still Owner-only for the same reasoning above) and "Help /
+FAQ" → "FAQ". Styled as plain small text links (`text-xs`, muted
+`text-slate-500`, no border/background) specifically so `SignOutButton`
+— which keeps its existing bordered-button treatment — still reads as
+the row's one primary action; the two new links are secondary by
+design, not by accident. `Sparkles`/`HelpCircle` icon imports removed
+along with the sidebar block that used them — the header links are
+text-only, no icons, matching `SignOutButton`'s own plain-text style
+rather than the sidebar nav's icon+label pattern. Re-verified after the
+move: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build` both clean.
+
+**Relabeled again, same link/target/styling**: "Pricing" → "Upgrade" on
+the header's `/pricing` link, per follow-up feedback — no other change
+(still `href="/pricing"`, still Owner-only, still the same `text-xs`
+muted styling). "FAQ" is unchanged. Re-verified: `pnpm test` 308/308,
+`tsc --noEmit` and `pnpm build` both clean.
+
+### Bug report: crash navigating dashboard → pricing → dashboard — investigated, not reproduced
+
+You reported a crash ("A server error occurred") on the preview
+deployment after: open `/dashboard` → click "Upgrade" → `/pricing` →
+click "Go to Dashboard" → crash. Asked me to reproduce it on the
+preview, pull the real Vercel function logs, and fix the confirmed
+root cause. I could not do the first two, and I'm recording exactly
+why and what I did instead, rather than guessing at a "fix" for a bug
+I never actually observed.
+
+**No Vercel access from this sandbox**: no `vercel` CLI, no
+`.vercel` project link, no `VERCEL_TOKEN`/API access, and no browser
+pointed at the live preview URL. Confirmed by checking for all of
+these directly rather than assuming — none exist here. I cannot open
+your preview deployment or read its Function/Runtime logs.
+
+**Built a real local repro harness instead of guessing**, since this
+sandbox also has no real `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` (the
+same long-standing limitation as every other PR in this project) —
+without one, `getCurrentUser()` never resolves a real session, so
+there was no way to even reach an authenticated `/dashboard` locally
+before now:
+1. A throwaway Node HTTP server standing in for Supabase's GoTrue
+   (`/auth/v1/token`, `/auth/v1/user`) returning a fixed user matching
+   the real seeded `admin@keepbooks.demo` (`firm_admin`) row already in
+   this sandbox's local Postgres.
+2. A script using the real `@supabase/ssr` `createServerClient` (the
+   exact library this app uses) to call `auth.setSession()` against
+   that fake server and capture the correctly chunked/encoded
+   `sb-*-auth-token` cookie it produces — this guarantees the cookie
+   is byte-for-byte what the real library would write, not a hand-
+   rolled guess at Supabase's cookie format.
+3. `.env.local` pointed at the fake server (temporarily — restored
+   from a backup immediately after; never committed), and Playwright
+   (the Chromium already pre-installed in this environment) driving a
+   real browser with that cookie through the exact reported sequence.
+
+**Confirmed the harness actually works**: the authenticated
+`/dashboard` render came back correctly as "Marc (Firm Admin) · Owner"
+— real proof this reproduces an authenticated session faithfully, not
+just a plausible-looking fake.
+
+**Ran the exact repro three ways, crash in none of them**:
+1. `next dev`, fresh session, the exact click sequence.
+2. `next build && next start` (a real production build, matching what
+   Vercel actually runs, not dev mode) — same sequence, same result.
+3. A specific, deliberate test of my leading hypothesis (a stale
+   client-side bundle from an older deploy colliding with a newer
+   server, since I'd pushed several commits to this branch in quick
+   succession right before this report — a well-known class of Next.js
+   App Router bug during active redeploys): loaded `/dashboard` then
+   `/pricing` on one build, rebuilt and restarted the server *without*
+   reloading the already-open browser tab (so its JS was now stale
+   relative to the server), then clicked "Go to Dashboard" from that
+   stale tab. Still no crash — Next.js recovered cleanly.
+
+**One real, defensible gap found and fixed regardless**: none of the
+`app/(marketing)/layout.tsx` links to `/dashboard`, `/login`, or
+`/signup` set `prefetch={false}`, unlike every comparable Link
+elsewhere in this app that points at a fully dynamic, per-user,
+cookie-gated page from a context where prefetching it has no real
+upside (the sidebar's own "Upgrade"/"FAQ" links already followed this
+pattern). Speculatively prefetching an auth-gated page from a public
+one is exactly the kind of thing that can produce a stale-cache/
+RSC-mismatch class of bug, so this is fixed as a reasonable hardening
+measure — but I want to be direct that I could not confirm this is
+what actually caused your crash, only that it removes a real, if
+unconfirmed, risk factor.
+
+**What I need to actually close this out**: the real error text from
+Vercel's Runtime/Function logs for that specific request (Vercel
+dashboard → this project → the preview deployment → Runtime Logs,
+filtered to around when it happened), or the error digest shown on
+the crash screen itself if the logs aren't handy — Next.js's
+production error screen usually includes a short digest hash that
+corresponds to exactly one server log entry. Without one of those, I
+have no way to distinguish "the prefetch fix above happened to solve
+it," "it was a one-off artifact of a mid-session redeploy while you
+were testing," or "there's a real bug I still haven't found."
+
+**Verified**: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build`
+both clean. All temporary local-only debugging infrastructure (the
+fake auth server, the cookie-minting script, the Playwright repro
+scripts, the temporary `.env.local` edit) was removed/restored before
+committing — `git status` confirms a clean diff containing only the
+`prefetch={false}` changes and this note. Still a draft PR, not
+merged.

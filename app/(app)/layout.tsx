@@ -124,7 +124,18 @@ function SidebarShell({
               Welcome, <span className="font-medium text-slate-700">{user.name}</span> ·{" "}
               <span className="font-medium text-slate-700">{ROLE_LABELS[user.role]}</span>
             </span>
-            <SignOutButton />
+            <div className="flex items-center gap-4">
+              {/* Owner only — matches every other billing-adjacent affordance in this layout (PlanStatusBanner, the eventual self-serve upgrade flow). Bookkeeper/Reviewer/Encoder/Viewer don't manage the firm's plan, and platform_admin has no firm of their own to upgrade. */}
+              {user.role === "firm_admin" && (
+                <Link href="/pricing" prefetch={false} className="text-xs font-medium text-slate-500 hover:text-slate-900 hover:underline">
+                  Upgrade
+                </Link>
+              )}
+              <Link href="/faq" prefetch={false} className="text-xs font-medium text-slate-500 hover:text-slate-900 hover:underline">
+                FAQ
+              </Link>
+              <SignOutButton />
+            </div>
           </div>
         </header>
         <main className="flex-1 px-6 py-6">
