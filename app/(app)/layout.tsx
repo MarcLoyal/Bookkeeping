@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { AlertTriangle, History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { AlertTriangle, HelpCircle, History, LayoutDashboard, Percent, ShieldCheck, Sparkles, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
 import { getRecentClientsForUser, type RecentClientRow } from "@/lib/data/clients";
@@ -116,6 +116,27 @@ function SidebarShell({
             </div>
           )}
         </nav>
+        <div className="space-y-0.5 border-t border-slate-100 px-2 py-3">
+          {/* Owner only — matches every other billing-adjacent affordance in this sidebar (PlanStatusBanner, the eventual self-serve upgrade flow). Bookkeeper/Reviewer/Encoder/Viewer don't manage the firm's plan, and platform_admin has no firm of their own to upgrade. */}
+          {user.role === "firm_admin" && (
+            <Link
+              href="/pricing"
+              prefetch={false}
+              className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            >
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+              Upgrade Plan
+            </Link>
+          )}
+          <Link
+            href="/faq"
+            prefetch={false}
+            className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          >
+            <HelpCircle className="h-4 w-4" aria-hidden="true" />
+            Help / FAQ
+          </Link>
+        </div>
       </aside>
       <div className="flex flex-1 flex-col">
         <header className="no-print border-b border-slate-200 bg-white">

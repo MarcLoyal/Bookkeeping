@@ -4259,3 +4259,59 @@ hand-set number from those, never derived from `PLAN_DEFAULTS`, so
 there was nothing else to "propagate." `pnpm test` 308/308, `tsc
 --noEmit` and `pnpm build` both clean. Still a draft PR, not merged —
 same pending-your-approval status as before.
+
+### In-app links to Pricing and FAQ
+
+Two small links added to `app/(app)/layout.tsx`'s `SidebarShell`, in a
+new footer block below the main nav (`border-t`, same visual treatment
+as the "Recent clients" section above it) — the only existing
+"account/firm info area" this sidebar has.
+
+**"Upgrade Plan" (→ `/pricing`) is Owner-only** (`user.role ===
+"firm_admin"`), not shown to every sidebar role. Matches every other
+billing-adjacent affordance already in this sidebar/layout —
+`PlanStatusBanner` is firm_admin-only, `setFirmPlan()` is a platform-
+admin action taken *on behalf of* a firm's Owner, and Bookkeeper/
+Reviewer/Encoder/Viewer have no reason to manage the firm's plan.
+`platform_admin` is excluded too — they administer the platform, not a
+customer firm, so there's no plan of their own to upgrade.
+
+**"Help / FAQ" (→ `/faq`) shows for every sidebar role**, including
+`platform_admin` — no reason to restrict it, and it's the only way a
+logged-in user could reach the FAQ without logging out first (the
+public `/faq` link previously only lived on `/login`/`/signup`).
+
+**Confirmed no redirect loop or broken layout for a logged-in user
+visiting either page** — traced through both request paths rather than
+assuming:
+- `middleware.ts`: `/pricing` and `/faq` are in `PUBLIC_PATHS`, so the
+  `!user && !isPublic` redirect-to-login check is `false` regardless of
+  auth state — a logged-in user's request passes through untouched.
+- `app/(marketing)/layout.tsx`: no `redirect()` call at all, for either
+  auth state — it's a route-group sibling of `app/(app)/`, not nested
+  inside it, so navigating there from the sidebar swaps to the public
+  header/footer shell (no sidebar), the same page a logged-out visitor
+  sees, just with "Go to Dashboard" instead of "Log in"/"Start free
+  trial" in the header.
+
+**Bug caught while confirming this, not assumed away**: the
+marketing footer's nav only ever showed "Log in"/"Create your firm" —
+unlike the header right above it, it never branched on `user`. A
+logged-in Owner clicking "Upgrade Plan" would have landed on a page
+whose footer told them to log in, while its header correctly said "Go
+to Dashboard." Fixed by giving the footer the same `user ? ... : ...`
+branch the header already had, rather than leaving a second, silently
+inconsistent copy of the same logic. Confirmed this is the only such
+duplication in the file — the header's branch is the only other place
+this decision is made.
+
+**Verified**: `pnpm test` 308/308 (unchanged — pure layout/copy, no new
+logic), `tsc --noEmit` and `pnpm build` both clean. `SidebarShell` isn't
+exported (it's a private function inside the layout file, same as
+every other role-gated block already in it), so this was checked by
+direct code reading plus the compiler's own JSX/type checking, the same
+level of confidence every other change to this specific function has
+relied on historically — not by an isolated component render like the
+Pricing/FAQ pages themselves got, since faking a real authenticated
+request here would need a live Postgres-backed session, not just a
+plain React render.

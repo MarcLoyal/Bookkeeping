@@ -58,12 +58,20 @@ export default async function MarketingLayout({ children }: { children: React.Re
             <Link href="/faq" className="hover:text-slate-900">
               FAQ
             </Link>
-            <Link href="/login" className="hover:text-slate-900">
-              Log in
-            </Link>
-            <Link href="/signup" className="hover:text-slate-900">
-              Create your firm
-            </Link>
+            {user ? (
+              <Link href="/dashboard" className="hover:text-slate-900">
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" className="hover:text-slate-900">
+                  Log in
+                </Link>
+                <Link href="/signup" className="hover:text-slate-900">
+                  Create your firm
+                </Link>
+              </>
+            )}
           </nav>
         </div>
       </footer>
