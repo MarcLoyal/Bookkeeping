@@ -3942,3 +3942,98 @@ files above, not by re-observing the crash and its absence live.
 `pnpm test` 288/288, `tsc --noEmit` and `pnpm build` both clean (build
 was clean before this fix too, per the note above — it was never a
 useful signal for this particular bug).
+
+## AI receipt/invoice capture, PR 1: Storage + source_documents foundation
+
+First of four PRs (scoped and confirmed with you before writing code —
+see the earlier scoping message this session). Schema/RLS only, no UI,
+no Anthropic API usage yet — this PR just finishes something Phase 0/1
+deliberately left half-built.
+
+**`source_documents`** (`db/schema/source_documents.ts`): id, clientId,
+storagePath, mimeType, uploadedBy, createdAt. `journal.ts`'s
+`journalEntries.sourceDocumentId` has said "FK to source_documents
+deferred to Phase 2 (table not built yet in this phase)" since Phase
+0/1 — this is that table, and the column now has a real
+`.references()` (`onDelete: "set null"`: an entry's own record should
+never disappear because its receipt image did).
+
+`clientId` is denormalized onto this table (also reachable via the
+journal entry that references it) so its own RLS can scope by client
+directly, the same way every other client-scoped table does — and so a
+row can exist before any journal entry does (upload happens first,
+draft entry gets created from the AI extraction result second).
+
+**`db/sql/020_source_documents_rls.sql`**: mirrors `journal_entries`'
+current insert/select shape (009_team_roles_rls.sql) exactly, since an
+upload is created by the same three roles that can create a draft
+entry (`firm_admin`/`bookkeeper` unconditional, `encoder` scoped to
+`uploaded_by = self`) and read by the same audience (`encoder` sees
+only their own; everyone else with client access sees all). No
+UPDATE/DELETE policy yet — nothing in this schema-only pass needs
+either, and 009's own history (insert/update/delete only got split out
+once Team & Roles actually needed the distinction) is the reason not
+to guess their shape now, before any UI exists to prove what it should
+be.
+
+**`db/sql/022_source_documents_grant.sql`**: explicit
+`GRANT ... TO keepbooks_app`, added proactively. 016_user_client_views
+_grant.sql already found — on the real Supabase project, not this
+sandbox — that a genuinely new table can't be trusted to inherit
+`keepbooks_app`'s privileges from 001's `ALTER DEFAULT PRIVILEGES`
+(that rule only applies to the one Postgres role that ran it, and a
+real project can have more than one role in play). Added this time
+before hitting the same live bug again, not after.
+
+**`db/sql/021_receipts_storage_rls.sql`** — Supabase Storage RLS for a
+`receipts` bucket. **Untestable in this sandbox**: the `storage` schema
+only exists on a real Supabase project (same situation, same
+conditional-DO-block guard, as `004_supabase_auth.sql`'s `auth.users`
+FK) — this sandbox's local Postgres has none, so this file silently
+no-ops here and its first real exercise will be against your actual
+Supabase project.
+
+Two things this migration cannot do, both manual steps for you:
+- **Create the `receipts` bucket itself** (Supabase dashboard → Storage
+  → New bucket, name it exactly `receipts`, private not public). A
+  reasonable file-size cap (e.g. 10 MB) and allowed MIME types
+  (`image/jpeg`, `image/png`, `image/webp`) can be set there too, as a
+  first line of defense before the app's own checks in a later PR.
+- Nothing else — the RLS policies themselves are in this migration and
+  apply automatically once the bucket exists and this migration runs
+  against that project.
+
+Object path convention this locks in for later PRs: every object's key
+is `{clientId}/{source_documents.id}.{ext}`, no bucket name in the key
+— `storage.foldername(name)` then reliably returns the owning client's
+id as its first element for every policy.
+
+**Why these policies can't reuse `app_current_role()`/
+`app_accessible_client_ids()`**: those read `app.current_user_id`, a
+session-local Postgres variable `db/client.ts#withUserContext` sets on
+this app's own connection. A Storage API request
+(`supabase-js .storage.from().upload()`) is a separate connection
+through Supabase's Storage service, authenticated via the request's
+JWT and exposing `auth.uid()` — `app.current_user_id` is simply never
+set there. So `021` re-derives the same access rules directly against
+`auth.uid()` + a join through `public.users`/`public.clients`,
+duplicating (not reusing) `app_accessible_client_ids()`'s logic. A real,
+accepted maintenance cost: if that function's access rules ever change,
+these policies need the same change made twice. Flagged here so it
+isn't forgotten later.
+
+**New tests**: `db/__tests__/source-documents-rls.test.ts` — 11 tests
+against the real RLS-enforcing `keepbooks_app` role via
+`withUserContext()`, same approach as `team-roles-rls.test.ts`/
+`user-client-views.test.ts`: Owner/Bookkeeper insert+see everything for
+an accessible client; Encoder inserts/sees only their own upload
+(rejects inserting as someone else); Reviewer/Viewer can't insert at
+all; cross-firm isolation on both insert and select; and a real
+`journal_entries.source_document_id` FK write/read round-trip. `pnpm
+test` 299/299 (288 existing + 11 new), run twice. `tsc --noEmit` and
+`pnpm build` both clean — no new routes, this pass is schema/RLS only.
+
+Not yet built (later PRs in this feature, per the confirmed
+breakdown): the Anthropic extraction service (PR 2), the mobile capture
+UI + draft creation (PR 3), and attachment display + polish (PR 4).
+Nothing in this PR is reachable from the UI yet.

@@ -18,6 +18,7 @@ import { clients } from "./clients";
 import { users } from "./firms";
 import { accounts } from "./accounts";
 import { contacts } from "./contacts";
+import { sourceDocuments } from "./source_documents";
 
 // Per-client gapless sequence generator for journal_entries.entry_no, incremented
 // atomically at posting time (see lib/accounting/posting.ts). Never derived from
@@ -46,8 +47,10 @@ export const journalEntries = pgTable(
     book: journalBookEnum("book").notNull(),
     referenceNo: text("reference_no"),
     description: text("description").notNull(),
-    // FK to source_documents deferred to Phase 2 (table not built yet in this phase).
-    sourceDocumentId: uuid("source_document_id"),
+    // Real FK as of source_documents.ts — set null (not cascade) if the
+    // attachment row is ever removed: an entry's own record is never
+    // supposed to disappear because its receipt image did.
+    sourceDocumentId: uuid("source_document_id").references(() => sourceDocuments.id, { onDelete: "set null" }),
     status: entryStatusEnum("status").notNull().default("draft"),
     postedBy: uuid("posted_by").references(() => users.id, { onDelete: "set null", onUpdate: "cascade" }),
     postedAt: timestamp("posted_at", { withTimezone: true }),
