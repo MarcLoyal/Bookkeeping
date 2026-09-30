@@ -3467,3 +3467,31 @@ pre-existing `team-roles-rls.test.ts` "clients: delete stays
 Owner-only" block was renamed and rewritten to assert the new
 reality (DELETE refused for Owner too) rather than the old one.
 `pnpm test` 242/242, `tsc --noEmit` and `pnpm build` both clean.
+
+## Temporary: live DB connection/RLS diagnostic page
+
+Closes the open question from "Investigated: platform_admin rows and
+all-clients visible on /settings/team" above — that entry diagnosed
+`DATABASE_URL` most likely connecting as Supabase's table-owning
+`postgres` role instead of the dedicated `keepbooks_app` role, but
+this sandbox has no live credentials to confirm it, and the diagnostic
+SQL handed over then was never confirmed run. Rather than trust code
+review a second time, `/settings/platform-admins/db-check`
+(`platform_admin`-gated) runs that same diagnostic live, against the
+deployment's own `DATABASE_URL` connection (not
+`MIGRATION_DATABASE_URL`):
+`current_user`, `rolsuper`, `rolbypassrls`, and whether RLS is actually
+enabled on `clients`/`users`. Expected-healthy: `keepbooks_app`,
+`false`, `false`, `true`, `true`.
+
+**Deliberately temporary** — a raw role/RLS-bypass readout has no
+reason to exist in a shipping app, platform_admin-gated or not. Both
+`lib/data/db-connection-diagnostic.ts` and this page should be deleted
+once confirmed live; each file's own header comment says so too, in
+case this entry gets missed.
+
+**Verified locally**: ran the exact query by hand against this
+sandbox's local Postgres — returns `keepbooks_app` / `f` / `f` / `t` /
+`t`, matching what `withUserContext`'s existing, already-proven
+connection is known to be here. `tsc --noEmit`, `pnpm test` 242/242,
+`pnpm build` all clean.
