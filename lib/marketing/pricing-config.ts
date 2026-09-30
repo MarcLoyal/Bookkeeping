@@ -18,11 +18,14 @@ import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
  *   them here, in one place, rather than hunting through the page
  *   component, once real numbers are ready.
  *
- * Deliberately says nothing about AI receipt capture or its per-month
- * scan cap: that feature (and firms.maxAiScansPerMonth) lives on a
- * separate, not-yet-merged PR, and this Pricing page is built against
- * main as it stands today — advertising a feature that isn't live in
- * production yet would be worse than leaving it out until it ships.
+ * RECEIPT_CAPTURE_HIGHLIGHT (below) is a deliberate, later addition to
+ * this file: the original version of this Pricing page said nothing
+ * about AI receipt capture, since that feature was still sitting on a
+ * separate, unmerged PR at the time and hadn't shipped to production
+ * yet. This copy was added once you asked for it specifically — it
+ * describes the feature generically (no scan-count numbers, no mention
+ * of firms.maxAiScansPerMonth or its fair-use cap), so it stays correct
+ * regardless of which PR merges first.
  */
 
 export type PricingTierId = "basic" | "premium" | "enterprise";
@@ -54,6 +57,9 @@ export const REFERRAL_PROGRAM = {
   description:
     "Refer another bookkeeping firm to Keep.Books. Once they subscribe to a paid plan, you both get 20% off your next billing cycle — our way of saying thanks for spreading the word.",
 };
+
+/** Short highlight line shown near the top of the Pricing page. Deliberately generic — no scan counts or plan-specific numbers. */
+export const RECEIPT_CAPTURE_HIGHLIGHT = "New: snap a photo of a receipt or invoice and Keep.Books drafts the entry for you — just review and confirm.";
 
 const REPORTS_LINE = "Trial Balance, Income Statement, Balance Sheet, loose-leaf books, and every applicable BIR form";
 

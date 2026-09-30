@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Check } from "lucide-react";
-import { PRICING_TIERS, REFERRAL_PROGRAM, TRIAL_OFFER, type PricingTier } from "@/lib/marketing/pricing-config";
+import { PRICING_TIERS, RECEIPT_CAPTURE_HIGHLIGHT, REFERRAL_PROGRAM, TRIAL_OFFER, type PricingTier } from "@/lib/marketing/pricing-config";
 
 export const metadata = {
   title: "Pricing — Keep.Books",
@@ -83,7 +83,12 @@ export default function PricingPage() {
         </p>
       </div>
 
-      <div className="mx-auto mt-8 flex max-w-xl flex-col items-center gap-1 rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+      <p className="mx-auto mt-6 max-w-xl text-center text-sm font-medium text-slate-700">
+        <span className="mr-1.5 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">New</span>
+        {RECEIPT_CAPTURE_HIGHLIGHT}
+      </p>
+
+      <div className="mx-auto mt-6 flex max-w-xl flex-col items-center gap-1 rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
         <p className="text-lg font-semibold text-slate-900">{TRIAL_OFFER.days}-day free trial</p>
         <p className="text-sm text-slate-600">{TRIAL_OFFER.description}</p>
       </div>

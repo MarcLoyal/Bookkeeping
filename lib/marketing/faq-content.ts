@@ -42,6 +42,11 @@ export const FAQ_ITEMS: FaqItem[] = [
       "Yes. Every plan supports adding team members with different roles: a Bookkeeper who manages the books day-to-day, an Encoder who can only enter draft transactions (never post them), a Reviewer who checks work before it's posted, and a Viewer with read-only access — alongside you as the firm's Owner. You add and manage team members from Settings → Team, up to your plan's seat limit.",
   },
   {
+    question: "Can I just take a photo of a receipt instead of entering it manually?",
+    answer:
+      "Yes. Snap a photo of a receipt or invoice with your phone (or upload one from your computer), and Keep.Books reads the vendor, amount, date, and VAT details for you, then drafts the transaction into your books automatically. Nothing gets posted on its own — a bookkeeper still reviews and confirms every draft before it becomes part of your books. If a photo is unclear or a figure looks uncertain, we'll flag it for a closer look instead of guessing silently.",
+  },
+  {
     question: "How does the referral discount work?",
     answer: REFERRAL_PROGRAM.description,
   },
