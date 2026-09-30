@@ -41,6 +41,9 @@ export function describeAuditEntry(entry: AuditEntryInput): string {
   if (entry.action === "SIGNUP") return "Firm created";
   if (entry.action === "PASSWORD_RESET") return "Password reset";
   if (entry.action === "ADMIN_CREATED") return "Platform admin created";
+  if (entry.action === "PLAN_DOWNGRADE") return "Plan downgraded to Free (trial expired)";
+  if (entry.action === "PLAN_CHANGE") return "Plan changed";
+  if (entry.action === "TRIAL_EXTENDED") return "Trial extended";
 
   const label = TABLE_LABELS[entry.tableName] ?? entry.tableName;
 

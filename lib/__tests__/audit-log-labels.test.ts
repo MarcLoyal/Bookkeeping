@@ -44,6 +44,22 @@ describe("describeAuditEntry", () => {
     );
   });
 
+  it("describes a plan downgrade", () => {
+    expect(describeAuditEntry({ action: "PLAN_DOWNGRADE", tableName: "firms", before: null, after: null, reason: null })).toBe(
+      "Plan downgraded to Free (trial expired)"
+    );
+  });
+
+  it("describes a manual plan change", () => {
+    expect(describeAuditEntry({ action: "PLAN_CHANGE", tableName: "firms", before: null, after: null, reason: null })).toBe("Plan changed");
+  });
+
+  it("describes a trial extension", () => {
+    expect(describeAuditEntry({ action: "TRIAL_EXTENDED", tableName: "firms", before: null, after: null, reason: null })).toBe(
+      "Trial extended"
+    );
+  });
+
   it("describes a role change on a users row", () => {
     expect(
       describeAuditEntry({
