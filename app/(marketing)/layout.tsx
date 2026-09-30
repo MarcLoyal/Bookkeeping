@@ -18,14 +18,14 @@ export default async function MarketingLayout({ children }: { children: React.Re
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <Link href="/" className="text-lg font-bold tracking-tight text-slate-900">
+          <Link href="/" prefetch={false} className="text-lg font-bold tracking-tight text-slate-900">
             Keep.Books
           </Link>
           <nav className="flex items-center gap-6 text-sm font-medium text-slate-600">
-            <Link href="/pricing" className="hover:text-slate-900">
+            <Link href="/pricing" prefetch={false} className="hover:text-slate-900">
               Pricing
             </Link>
-            <Link href="/faq" className="hover:text-slate-900">
+            <Link href="/faq" prefetch={false} className="hover:text-slate-900">
               FAQ
             </Link>
             {user ? (
@@ -52,10 +52,10 @@ export default async function MarketingLayout({ children }: { children: React.Re
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 py-8 sm:flex-row sm:px-6">
           <p className="text-sm text-slate-500">© {new Date().getFullYear()} Keep.Books. Bookkeeping for the Philippine market.</p>
           <nav className="flex items-center gap-5 text-sm text-slate-500">
-            <Link href="/pricing" className="hover:text-slate-900">
+            <Link href="/pricing" prefetch={false} className="hover:text-slate-900">
               Pricing
             </Link>
-            <Link href="/faq" className="hover:text-slate-900">
+            <Link href="/faq" prefetch={false} className="hover:text-slate-900">
               FAQ
             </Link>
             {user ? (
