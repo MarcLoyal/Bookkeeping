@@ -29,11 +29,11 @@ export default function FaqPage() {
 
       <p className="mx-auto mt-10 max-w-xl text-center text-sm text-slate-500">
         Still have questions?{" "}
-        <Link href="/pricing" className="font-medium text-slate-900 hover:underline">
+        <Link href="/pricing" prefetch={false} className="font-medium text-slate-900 hover:underline">
           Check our Pricing page
         </Link>{" "}
         or{" "}
-        <Link href="/signup" className="font-medium text-slate-900 hover:underline">
+        <Link href="/signup" prefetch={false} className="font-medium text-slate-900 hover:underline">
           start a free trial
         </Link>{" "}
         to see for yourself.

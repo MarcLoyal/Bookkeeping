@@ -59,6 +59,7 @@ function TierCard({ tier }: { tier: PricingTier }) {
 
       <Link
         href="/signup"
+        prefetch={false}
         className={`mt-6 block rounded-md px-4 py-2.5 text-center text-sm font-medium ${
           highlighted ? "border border-slate-300 text-slate-900 hover:bg-slate-50" : "bg-slate-900 text-white hover:bg-slate-800"
         }`}
@@ -101,11 +102,11 @@ export default function PricingPage() {
 
       <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-slate-500">
         Have questions about plans or billing?{" "}
-        <Link href="/faq" className="font-medium text-slate-900 hover:underline">
+        <Link href="/faq" prefetch={false} className="font-medium text-slate-900 hover:underline">
           Check our FAQ
         </Link>{" "}
         or{" "}
-        <Link href="/signup" className="font-medium text-slate-900 hover:underline">
+        <Link href="/signup" prefetch={false} className="font-medium text-slate-900 hover:underline">
           start your free trial
         </Link>{" "}
         — no credit card required.

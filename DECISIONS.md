@@ -4425,3 +4425,61 @@ scripts, the temporary `.env.local` edit) was removed/restored before
 committing — `git status` confirms a clean diff containing only the
 `prefetch={false}` changes and this note. Still a draft PR, not
 merged.
+
+### Root cause confirmed via real Vercel logs, after PR #44 merged: `EMAXCONNSESSION` — pool exhaustion, not a routing bug
+
+You pulled the actual Vercel Runtime Logs after merging #44 and found
+the real error, on production itself: `(EMAXCONNSESSION) max clients
+reached in session mode - max clients are limited to pool_size: 15`,
+with `/pricing`, `/faq`, `/signup`, `/login`, `/forgot-password` all
+firing within the same second — exactly what Next.js Link prefetching
+looks like on the wire. This confirms, with real data, the mechanism I
+could only flag as an unconfirmed risk factor before (no Vercel access
+in this sandbox to verify it directly).
+
+**The actual scope was bigger than what got fixed in #44**: that PR
+only added `prefetch={false}` to the marketing layout's
+`/dashboard`/`/login`/`/signup` links (the ones directly implicated in
+your original crash report). It missed every OTHER new link this
+PR cluster added: the marketing layout's own Pricing/FAQ links
+(header + footer, 4 total) and wordmark, the Pricing page's own
+signup/FAQ links (3), the FAQ page's own pricing/signup links (2), and
+the small Pricing/FAQ footer rows added to `/login` and `/signup` (3
+each). All 16 were unprefetched. `app/(app)/layout.tsx`'s Upgrade/FAQ
+header links were already correct from the start — checked, not
+assumed.
+
+Each of these Links, sitting in a nav block near the top of a small
+page, is in the viewport essentially immediately — Next.js's default
+`prefetch={true}` behavior means every one of them fires a real
+request the moment the page paints, each one running that route's own
+`getCurrentUser()` (a real Postgres round trip via
+`withUserContext()`) to decide its own logged-in/out state. A single
+visit to any one of these five pages could trigger up to 4-5
+simultaneous extra DB connections purely from prefetching links that
+were never clicked. Fixed by adding `prefetch={false}` to all 16 —
+confirmed via `grep` that no unprefetched `<Link>` remains in any file
+this PR cluster touched.
+
+**This is a mitigation, not the full fix — said plainly, not
+oversold**: the error string itself ("session mode... pool_size: 15")
+points at how `DATABASE_URL` is connected to Supabase in production —
+a 15-connection cap is a Session-mode Supavisor/PgBouncer pooler
+setting, and Supabase's own guidance is to use *Transaction*-mode
+pooling for serverless (many short-lived Vercel function invocations,
+each wanting its own connection) — exactly the reasoning already
+written into `db/client.ts`'s existing comment about `prepare: false`
+being "required when `DATABASE_URL` points at a PgBouncer-style pooler
+(e.g. Supabase's Transaction pooler in production)", implying that was
+always the intended production setup. Whether production's actual
+`DATABASE_URL` is on Session or Transaction mode right now is a Vercel
+environment-variable / Supabase dashboard setting, not something in
+this repository — I have no access to either to check or change it.
+Removing the extra prefetch-driven connection pressure should make a
+15-connection ceiling far less likely to be hit by ordinary browsing,
+but a 15-connection cap is still low for any real concurrent
+production load regardless of prefetching, and is worth checking
+directly.
+
+**Verified**: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build`
+both clean.

@@ -34,16 +34,16 @@ export default async function SignupPage() {
         <SignupForm />
         <p className="mt-6 text-center text-sm text-slate-500">
           Already have an account?{" "}
-          <Link href="/login" className="font-medium text-slate-900 hover:underline">
+          <Link href="/login" prefetch={false} className="font-medium text-slate-900 hover:underline">
             Sign in
           </Link>
         </p>
         <p className="mt-4 text-center text-xs text-slate-400">
-          <Link href="/pricing" className="hover:text-slate-600 hover:underline">
+          <Link href="/pricing" prefetch={false} className="hover:text-slate-600 hover:underline">
             Pricing
           </Link>
           {" · "}
-          <Link href="/faq" className="hover:text-slate-600 hover:underline">
+          <Link href="/faq" prefetch={false} className="hover:text-slate-600 hover:underline">
             FAQ
           </Link>
         </p>
