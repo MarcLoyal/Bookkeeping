@@ -4135,3 +4135,111 @@ take it further. `tsc --noEmit` and `pnpm build` both clean with this
 file added; `pnpm test` unaffected (308/308) — this script has no test
 of its own, since its whole job is exercising the real network path
 `lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.
+
+## Public Pricing and FAQ pages
+
+Informational/marketing pages only — no billing, no payment logic, no
+schema changes. Built against `main` as it stands today, deliberately
+independent of the still-unmerged AI receipt-capture fair-use-cap PR
+(`claude/receipt-capture-ui`): neither page mentions AI receipt capture
+or its scan cap, since advertising a feature that isn't live in
+production yet would be worse than leaving it out until it ships. If
+that PR merges first, revisit whether to add it back in as a
+differentiator.
+
+**Placeholder numbers — flagged here and in the PR description, not
+just in code comments**: every monthly ₱ price
+(`lib/marketing/pricing-config.ts`'s `monthlyPricePhp: 1499` on Basic,
+`3499` on Premium) and the referral discount
+(`REFERRAL_PROGRAM.discountPercent: 20`) are placeholders you asked to
+finalize later. Enterprise deliberately has no numeric price at all
+(`monthlyPricePhp: null` → renders as "Custom") — it's positioned as a
+contact-sales tier for large corporations, per spec, not a fourth
+placeholder number to guess at.
+
+**Everything else in the config is real, not invented**: client counts,
+seat counts, and the per-client-assignment feature are read directly off
+`lib/billing/plan-limits.ts`'s `PLAN_DEFAULTS` — the exact same numbers
+already enforced by `db/sql/018_plan_limits.sql`'s triggers the moment a
+firm signs up onto a plan. A marketing page promising a different limit
+than what the product actually enforces would be worse than no page at
+all, so Basic/Premium's "up to N clients" and "N user seats" can never
+drift from reality on their own — only `PLAN_DEFAULTS` itself, or the
+price, would need updating. Premium's "assign specific bookkeepers to
+specific clients" bullet is the real `perClientAssignmentAllowed` gate
+(`enforce_per_client_assignment_allowed()`, `018_plan_limits.sql`), not
+invented marketing copy.
+
+**No design system to reuse, so the visual language was reverse-engineered
+from the two existing public pages**: `app/page.tsx` redirects
+immediately to `/login` or `/dashboard` — there is no existing marketing
+site or main nav to hook "where a Pricing/FAQ link would normally live"
+into. `app/login/page.tsx`/`app/signup/page.tsx` (slate palette, "K"
+wordmark, rounded-xl white cards) and `app/(app)/layout.tsx`'s
+authenticated topbar (Keep.Books wordmark, `max-w-7xl`/`max-w-6xl`
+containers, `border-slate-200`) are the only two visual references that
+exist, so the new `app/(marketing)/layout.tsx` shared header/footer
+reuses both directly rather than inventing a third look. Login and
+signup gained a small "Pricing · FAQ" link row under their existing
+"Create your firm"/"Sign in" line — the closest thing this app has to
+"where the main nav/footer would normally live," since neither page has
+a footer of its own to extend.
+
+**Route group, not top-level pages**: `app/(marketing)/pricing/page.tsx`
+and `app/(marketing)/faq/page.tsx` share `app/(marketing)/layout.tsx` via
+a route group, the same convention `app/(app)/` already uses for the
+authenticated shell — one header/footer definition, not copy-pasted into
+both pages.
+
+**`middleware.ts`**: `/pricing` and `/faq` added to `PUBLIC_PATHS`.
+Without this, an unauthenticated visitor hitting either page would be
+redirected straight to `/login` — the whole point of a public pricing/
+FAQ page is that you can read it before signing up.
+
+**FAQ answers, checked against real RLS/access behavior, not just
+"reassuring-sounding"**: "Who can see my files" is answered from
+`db/sql/007_platform_admin_dashboard.sql`'s own comment ("no SELECT
+policy for clients or audit_log for platform_admin exists at all") —
+the platform admin can see a firm's name/plan/owner for billing and
+support, never client financial data, and that's a real, checked
+constraint, not a promise. "What happens after my 7-day trial ends?" is
+phrased around the actual current flow (a dashboard notice, then a
+manual move to Free that makes older clients read-only rather than
+deleting anything) rather than implying an automated billing cutoff that
+doesn't exist yet. "Can I upgrade or downgrade later?" says plainly that
+switching plans today means reaching out — `setFirmPlan()` is a platform
+admin action (`/settings/platform-admins/trials`), not yet a self-serve
+button in the Owner's own dashboard — rather than implying a self-serve
+flow that isn't built.
+
+**FAQ as data, not JSX**: `lib/marketing/faq-content.ts` exports a plain
+`FaqItem[]`, rendered with native `<details>`/`<summary>` (Tailwind's
+`group-open:` variant rotates the chevron) — no client component or JS
+needed for the accordion. The referral-discount answer pulls
+`REFERRAL_PROGRAM.description` directly from `pricing-config.ts` rather
+than restating the number, so the two pages can't quote different
+percentages if it's ever updated.
+
+**Verified**: `pnpm test` 308/308 (unchanged — no new data/business
+logic, nothing to unit test here), `tsc --noEmit` and `pnpm build` both
+clean (`/pricing` and `/faq` both appear in the route list). The actual
+`next dev` server could not be started in this sandbox at all —
+`middleware.ts` unconditionally requires real
+`NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` on every request (including these
+two now-public pages), and this sandbox has neither configured, the same
+pre-existing limitation documented across the Supabase Auth migration
+and AI receipt-capture PRs. This blocks every page in the app from
+running here, not something introduced by this change. As a substitute,
+both page components were rendered directly with `react-dom/server`
+(bypassing the auth-dependent shared layout, which can't be exercised
+without live Supabase) — confirmed both render without throwing, all
+three pricing tiers and all 8 FAQ questions appear in the output, and the
+referral/trial copy resolves correctly. The full page, including the
+header's logged-in/logged-out nav state, still needs a real browser
+check once you have Supabase credentials available — same category of
+"needs your own environment to verify" as this whole multi-tenancy
+effort's other PRs.
+
+Opened as a **draft PR, not merged** — per your explicit instruction
+("a real client is currently using production... this stays pending
+until I review and approve it manually").
