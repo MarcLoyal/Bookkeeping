@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@aivangogh/ph-address": "^2026.2.3",
+    "@anthropic-ai/sdk": "^0.129.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
     "@tanstack/react-table": "^8.20.5",
