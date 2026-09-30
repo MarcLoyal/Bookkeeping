@@ -3467,3 +3467,62 @@ pre-existing `team-roles-rls.test.ts` "clients: delete stays
 Owner-only" block was renamed and rewritten to assert the new
 reality (DELETE refused for Owner too) rather than the old one.
 `pnpm test` 242/242, `tsc --noEmit` and `pnpm build` both clean.
+
+## Temporary: live DB connection/RLS diagnostic page
+
+Closes the open question from "Investigated: platform_admin rows and
+all-clients visible on /settings/team" above — that entry diagnosed
+`DATABASE_URL` most likely connecting as Supabase's table-owning
+`postgres` role instead of the dedicated `keepbooks_app` role, but
+this sandbox has no live credentials to confirm it, and the diagnostic
+SQL handed over then was never confirmed run. Rather than trust code
+review a second time, `/settings/platform-admins/db-check`
+(`platform_admin`-gated) runs that same diagnostic live, against the
+deployment's own `DATABASE_URL` connection (not
+`MIGRATION_DATABASE_URL`):
+`current_user`, `rolsuper`, `rolbypassrls`, and whether RLS is actually
+enabled on `clients`/`users`. Expected-healthy: `keepbooks_app`,
+`false`, `false`, `true`, `true`.
+
+**Deliberately temporary** — a raw role/RLS-bypass readout has no
+reason to exist in a shipping app, platform_admin-gated or not. Both
+`lib/data/db-connection-diagnostic.ts` and this page should be deleted
+once confirmed live; each file's own header comment says so too, in
+case this entry gets missed.
+
+**Verified locally**: ran the exact query by hand against this
+sandbox's local Postgres — returns `keepbooks_app` / `f` / `f` / `t` /
+`t`, matching what `withUserContext`'s existing, already-proven
+connection is known to be here. `tsc --noEmit`, `pnpm test` 242/242,
+`pnpm build` all clean.
+
+### Fix: crashed on the real deployment — `pg_class.relname` isn't schema-qualified
+
+**Reported live**: 500 on `/settings/platform-admins/db-check`, Vercel
+logs showing `more than one row returned by a subquery used as an
+expression`.
+
+**Root cause**: `(select relrowsecurity from pg_class where relname =
+'users')` matches on bare table name, not `schema.table` — and a real
+Supabase project has `auth.users` (Supabase's own identity table)
+alongside this app's `public.users`. Both match `relname = 'users'`,
+so the subquery returns 2 rows instead of the ≤1 a scalar subquery
+requires, and Postgres throws. Never reproduced against this
+sandbox's local Postgres before now because it has no `auth` schema at
+all — confirmed by adding a throwaway `auth.users` table locally,
+which reproduced the exact reported error, then removing it once the
+fix was verified.
+
+**Fix**: both `clients` and `users` lookups now resolve via
+`to_regclass('public.clients')` / `to_regclass('public.users')` —
+`to_regclass` takes a schema-qualified name and returns exactly one
+OID (or `NULL` if the object doesn't exist), so it can never match
+more than one relation regardless of what else in the database shares
+the bare table name.
+
+**Verified**: reproduced the crash locally (same technique as above:
+added `auth.users`, ran the original unscoped query, got the identical
+`more than one row` error), then confirmed the `to_regclass`-based
+query returns the correct single row against that same simulated
+collision. `tsc --noEmit`, `pnpm test` 242/242, `pnpm build` all
+clean.
