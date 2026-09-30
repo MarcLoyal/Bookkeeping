@@ -4243,3 +4243,19 @@ effort's other PRs.
 Opened as a **draft PR, not merged** — per your explicit instruction
 ("a real client is currently using production... this stays pending
 until I review and approve it manually").
+
+### Pricing update: Basic ₱2,499/mo, Premium ₱7,999/mo
+
+Revised `lib/marketing/pricing-config.ts`'s two placeholder prices
+(Basic ₱1,499 → ₱2,499, Premium ₱3,499 → ₱7,999) per your explicit
+numbers — Enterprise's "Custom" and the 20% referral discount are
+unchanged. Confirmed the new numbers are the single place they live:
+grepped the whole `app/`/`lib/` tree for the old figures (`1499`,
+`3499`) and found no other reference to update, then rendered
+`PricingPage` directly to confirm `₱2,499`/`₱7,999` appear and the old
+figures don't. `PLAN_DEFAULTS` itself (client/seat counts) is
+untouched — the price fields on `PRICING_TIERS` were always a separate,
+hand-set number from those, never derived from `PLAN_DEFAULTS`, so
+there was nothing else to "propagate." `pnpm test` 308/308, `tsc
+--noEmit` and `pnpm build` both clean. Still a draft PR, not merged —
+same pending-your-approval status as before.
