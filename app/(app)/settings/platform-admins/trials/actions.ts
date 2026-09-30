@@ -26,7 +26,6 @@ export async function downgradeFirmAction(firmId: string): Promise<SimpleActionR
 }
 
 export type FormActionState = { error: string | null; success: boolean };
-export const initialFormState: FormActionState = { error: null, success: false };
 
 export async function extendTrialAction(_prevState: FormActionState, formData: FormData): Promise<FormActionState> {
   const admin = await requirePlatformAdmin();

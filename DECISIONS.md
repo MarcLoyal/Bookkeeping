@@ -3903,3 +3903,42 @@ ordering, owner join) — both added to
 existing + 3 new), run twice. `tsc --noEmit` and `pnpm build` both
 clean — `/settings/platform-admins/trials` appears in the route list.
 No new migrations — this pass touches no schema or RLS.
+
+## Bug fix: Extend Trial 500 — `initialFormState`/`initialSwapState` exported from a `"use server"` file
+
+**Found in production** (Vercel logs): `Error: A "use server" file can
+only export async functions, found object.` Both new `actions.ts`
+files from the pass above (`app/(app)/settings/platform-admins/trials/
+actions.ts` and `app/(app)/clients/actions.ts`) exported a plain
+`const` object — `initialFormState`/`initialSwapState` — alongside the
+real Server Actions. Next.js's Server Actions compiler requires every
+top-level export of a `"use server"` module to be an async function;
+a data-only export like this is a hard error, not a warning — it just
+doesn't surface until the module is actually invoked at request time,
+not at `next build` (confirmed directly: `pnpm build` succeeded with
+the bug present, same as after the fix — this class of error is
+runtime-only in this Next version, exactly matching what reached
+Vercel as a live 500 rather than a failed deploy).
+
+**Fix**: moved each initial-state constant out of its `actions.ts` and
+into the one client component that used it
+(`expired-trial-row.tsx`/`make-active-button.tsx`), importing only the
+*type* from `actions.ts` (a type-only export is erased at compile time,
+never a real runtime export, so it's fine). This isn't a new pattern —
+it's the one `invite-form.tsx` and `archive-client-button.tsx` already
+use correctly (`const initialState: XState = {...}` defined locally,
+type imported from `./actions`); the two new files in the previous
+pass simply didn't match it. `clients/actions.ts`'s `initialSwapState`
+had the identical bug but hadn't been clicked yet — fixed alongside the
+one that actually crashed, not left for a second report.
+
+**Verified**: grepped every `"use server"` file in the app for a
+top-level `export const`/`let`/`var` — none remain outside these two,
+now fixed. Full browser click-through wasn't possible in this sandbox
+(no real Supabase project configured here, so the platform-admin login
+needed to reach the button can't complete) — this fix is otherwise
+confirmed by exact structural parity with the two already-working
+files above, not by re-observing the crash and its absence live.
+`pnpm test` 288/288, `tsc --noEmit` and `pnpm build` both clean (build
+was clean before this fix too, per the note above — it was never a
+useful signal for this particular bug).

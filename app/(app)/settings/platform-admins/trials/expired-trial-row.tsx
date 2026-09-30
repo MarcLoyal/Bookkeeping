@@ -8,9 +8,14 @@ import {
   changePlanAction,
   downgradeFirmAction,
   extendTrialAction,
-  initialFormState,
   previewDowngradeAction,
+  type FormActionState,
 } from "./actions";
+
+// Defined here, not in actions.ts: a "use server" file may only export
+// async functions — a plain const object export crashes at runtime
+// ("A 'use server' file can only export async functions, found object").
+const initialFormState: FormActionState = { error: null, success: false };
 
 function daysSince(date: Date): number {
   return Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / (24 * 60 * 60 * 1000)));

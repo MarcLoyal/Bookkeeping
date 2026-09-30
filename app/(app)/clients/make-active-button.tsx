@@ -1,7 +1,12 @@
 "use client";
 
 import { useActionState } from "react";
-import { initialSwapState, swapActiveClientAction } from "./actions";
+import { swapActiveClientAction, type SwapActiveClientActionState } from "./actions";
+
+// Defined here, not in actions.ts: a "use server" file may only export
+// async functions — a plain const object export crashes at runtime
+// ("A 'use server' file can only export async functions, found object").
+const initialSwapState: SwapActiveClientActionState = { error: null, success: false, deactivatedClientName: null };
 
 /**
  * The Owner-facing side of "auto-pick, Owner can swap after" — see

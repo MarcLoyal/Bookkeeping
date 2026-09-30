@@ -5,7 +5,6 @@ import { requireCurrentUser } from "@/lib/auth/current-user";
 import { swapActiveClient } from "@/lib/billing/swap-active-client";
 
 export type SwapActiveClientActionState = { error: string | null; success: boolean; deactivatedClientName: string | null };
-export const initialSwapState: SwapActiveClientActionState = { error: null, success: false, deactivatedClientName: null };
 
 export async function swapActiveClientAction(
   _prevState: SwapActiveClientActionState,
