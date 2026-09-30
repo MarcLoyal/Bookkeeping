@@ -11,10 +11,11 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../schema";
 import { flagTrialExpiredIfNeeded } from "../../lib/billing/flag-expired-trials";
-import { downgradeFirmToFree } from "../../lib/billing/downgrade-firm-to-free";
+import { downgradeFirmToFree, previewDowngradeFirmToFree } from "../../lib/billing/downgrade-firm-to-free";
 import { swapActiveClient } from "../../lib/billing/swap-active-client";
 import { setFirmPlan } from "../../lib/billing/set-firm-plan";
 import { extendFirmTrial } from "../../lib/billing/extend-firm-trial";
+import { listExpiredTrialFirms } from "../../lib/data/platform-billing";
 import type { CurrentUser } from "../../lib/auth/current-user";
 
 const ownerConn = postgres(process.env.MIGRATION_DATABASE_URL!, { max: 2 });
@@ -190,6 +191,22 @@ describe("downgradeFirmToFree()", () => {
     ]);
   });
 
+  it("previewDowngradeFirmToFree() shows exactly what the real downgrade below then does — must run first, before that mutates the fixture", async () => {
+    const preview = await previewDowngradeFirmToFree(FIRM_ID);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.clientsToKeepActive.map((c) => c.id).sort()).toEqual([CLIENT_IDS[2], CLIENT_IDS[3], CLIENT_IDS[4]].sort());
+    expect(preview.clientsToMakeReadOnly.map((c) => c.id).sort()).toEqual([CLIENT_IDS[0], CLIENT_IDS[1]].sort());
+    expect(preview.staffToDeactivate.map((s) => s.id).sort()).toEqual([BOOKKEEPER_ID, REVIEWER_ID].sort());
+
+    // The dry run must not have mutated anything — same active clients,
+    // same active staff, still on the trial plan.
+    const clientRows = await ownerDb.select().from(schema.clients).where(eq(schema.clients.firmId, FIRM_ID));
+    expect(clientRows.every((c) => c.status === "active")).toBe(true);
+    const [firm] = await ownerDb.select().from(schema.firms).where(eq(schema.firms.id, FIRM_ID));
+    expect(firm.plan).toBe("trial");
+  });
+
   it("keeps the 3 most-recently-viewed clients active and makes the rest read-only", async () => {
     const result = await downgradeFirmToFree(PLATFORM_ADMIN_ID, FIRM_ID);
     expect(result.ok).toBe(true);
@@ -359,5 +376,73 @@ describe("extendFirmTrial()", () => {
     const result = await extendFirmTrial(PLATFORM_ADMIN_ID, { firmId: NON_TRIAL_FIRM_ID, days: 7 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/isn't on the trial plan/i);
+  });
+});
+
+describe("listExpiredTrialFirms()", () => {
+  const FLAGGED_FIRM_ID = "00000000-0000-4000-aa00-000000000090";
+  const FLAGGED_OWNER_ID = "00000000-0000-4000-aa00-000000000091";
+  const NOT_YET_FLAGGED_FIRM_ID = "00000000-0000-4000-aa00-000000000092";
+  const NOT_YET_FLAGGED_OWNER_ID = "00000000-0000-4000-aa00-000000000093";
+  const OLDER_FLAG_FIRM_ID = "00000000-0000-4000-aa00-000000000094";
+
+  beforeAll(async () => {
+    await upsertFirm(FLAGGED_FIRM_ID, "Listed Expired Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: new Date(Date.now() - 1000),
+    });
+    await upsertFirm(OLDER_FLAG_FIRM_ID, "Older-Flagged Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+    });
+    await upsertFirm(NOT_YET_FLAGGED_FIRM_ID, "Not-Yet-Flagged Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+
+    await ownerDb
+      .insert(schema.users)
+      .values({
+        id: FLAGGED_OWNER_ID,
+        firmId: FLAGGED_FIRM_ID,
+        email: "listed-expired-owner@test.local",
+        name: "Listed Owner",
+        role: "firm_admin",
+        active: true,
+      })
+      .onConflictDoUpdate({ target: schema.users.id, set: { firmId: FLAGGED_FIRM_ID } });
+    await ownerDb
+      .insert(schema.users)
+      .values({
+        id: NOT_YET_FLAGGED_OWNER_ID,
+        firmId: NOT_YET_FLAGGED_FIRM_ID,
+        email: "not-yet-flagged-owner@test.local",
+        name: "Not Flagged Owner",
+        role: "firm_admin",
+        active: true,
+      })
+      .onConflictDoUpdate({ target: schema.users.id, set: { firmId: NOT_YET_FLAGGED_FIRM_ID } });
+  });
+
+  it("only lists firms with trialExpiredFlaggedAt set, oldest flag first", async () => {
+    const rows = await listExpiredTrialFirms(PLATFORM_ADMIN_ID);
+    const ids = rows.map((r) => r.id);
+    expect(ids).not.toContain(NOT_YET_FLAGGED_FIRM_ID);
+    expect(ids).toContain(FLAGGED_FIRM_ID);
+    expect(ids).toContain(OLDER_FLAG_FIRM_ID);
+
+    const olderIndex = ids.indexOf(OLDER_FLAG_FIRM_ID);
+    const newerIndex = ids.indexOf(FLAGGED_FIRM_ID);
+    expect(olderIndex).toBeLessThan(newerIndex);
+  });
+
+  it("joins each firm to its owner's name/email", async () => {
+    const rows = await listExpiredTrialFirms(PLATFORM_ADMIN_ID);
+    const row = rows.find((r) => r.id === FLAGGED_FIRM_ID);
+    expect(row?.ownerName).toBe("Listed Owner");
+    expect(row?.ownerEmail).toBe("listed-expired-owner@test.local");
   });
 });

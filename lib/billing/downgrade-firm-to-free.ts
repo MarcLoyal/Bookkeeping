@@ -8,6 +8,70 @@ export type DowngradeResult =
   | { ok: true; clientsKeptActive: { id: string; name: string }[]; clientsMadeReadOnly: number; staffDeactivated: number }
   | { ok: false; error: string };
 
+type ClientCandidate = { id: string; name: string; last_viewed: Date | null };
+
+/**
+ * Most-recently-viewed first (across any user at the firm), oldest/
+ * never-viewed last — shared by the real downgrade below AND
+ * previewDowngradeFirmToFree() so the platform admin dashboard's "here's
+ * what will happen" preview can never drift from what actually happens on
+ * confirm. Raw SQL, not the query builder — matches
+ * lib/data/platform-dashboard.ts's own established pattern for a GROUP BY
+ * + MAX() + ORDER BY combination like this one. Takes any drizzle-like
+ * executor (a `tx` inside a transaction, or `authDb` directly for a plain
+ * read) since neither caller needs a transaction just to SELECT.
+ */
+async function selectDowngradeCandidates(db: { execute: typeof authDb.execute }, firmId: string): Promise<ClientCandidate[]> {
+  return (await db.execute(sql`
+    select c.id, c.registered_name as name, max(v.last_viewed_at) as last_viewed
+    from clients c
+    left join user_client_views v on v.client_id = c.id
+    where c.firm_id = ${firmId} and c.status in ('onboarding', 'active')
+    group by c.id, c.registered_name
+    order by max(v.last_viewed_at) desc nulls last, c.created_at desc
+  `)) as unknown as ClientCandidate[];
+}
+
+/** Same staff the downgrade below deactivates: every non-Owner, non-client_user role that's currently active. */
+async function selectStaffToDeactivate(db: { select: typeof authDb.select }, firmId: string) {
+  return db
+    .select({ id: users.id, name: users.name, role: users.role })
+    .from(users)
+    .where(and(eq(users.firmId, firmId), ne(users.role, "firm_admin"), ne(users.role, "client_user"), eq(users.active, true)));
+}
+
+export type DowngradePreview =
+  | {
+      ok: true;
+      clientsToKeepActive: { id: string; name: string }[];
+      clientsToMakeReadOnly: { id: string; name: string }[];
+      staffToDeactivate: { id: string; name: string; role: string }[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Read-only dry run for the platform admin dashboard's "here's what will
+ * happen" confirmation step, before downgradeFirmToFree() actually runs.
+ * Deliberately reuses selectDowngradeCandidates/selectStaffToDeactivate
+ * rather than a separate hand-written query — this preview being wrong
+ * (showing different clients/staff than the real action touches) would be
+ * worse than not having a preview at all.
+ */
+export async function previewDowngradeFirmToFree(firmId: string): Promise<DowngradePreview> {
+  const [firm] = await authDb.select().from(firms).where(eq(firms.id, firmId));
+  if (!firm) return { ok: false, error: "Firm not found." };
+
+  const { maxClients } = PLAN_DEFAULTS.free;
+  const [candidates, staff] = await Promise.all([selectDowngradeCandidates(authDb, firmId), selectStaffToDeactivate(authDb, firmId)]);
+
+  return {
+    ok: true,
+    clientsToKeepActive: candidates.slice(0, maxClients).map((c) => ({ id: c.id, name: c.name })),
+    clientsToMakeReadOnly: candidates.slice(maxClients).map((c) => ({ id: c.id, name: c.name })),
+    staffToDeactivate: staff,
+  };
+}
+
 /**
  * The manual downgrade action a platform admin triggers from the
  * dashboard's expired-trial queue — see DECISIONS.md for why this is a
@@ -43,17 +107,10 @@ export async function downgradeFirmToFree(platformAdminId: string, firmId: strin
     // Most-recently-viewed first (across any user at the firm), oldest/
     // never-viewed last — the top `maxClients` stay active, matching
     // "auto-pick, Owner can swap after" (see swap-active-client.ts for
-    // the swap side of that). Raw SQL, not the query builder — matches
-    // lib/data/platform-dashboard.ts's own established pattern for a
-    // GROUP BY + MAX() + ORDER BY combination like this one.
-    const candidates = (await tx.execute(sql`
-      select c.id, c.registered_name as name, max(v.last_viewed_at) as last_viewed
-      from clients c
-      left join user_client_views v on v.client_id = c.id
-      where c.firm_id = ${firmId} and c.status in ('onboarding', 'active')
-      group by c.id, c.registered_name
-      order by max(v.last_viewed_at) desc nulls last, c.created_at desc
-    `)) as unknown as { id: string; name: string; last_viewed: Date | null }[];
+    // the swap side of that). Shared with previewDowngradeFirmToFree()
+    // above so the dashboard's preview can never show different clients
+    // than this actually keeps/demotes.
+    const candidates = await selectDowngradeCandidates(tx, firmId);
 
     const keep = candidates.slice(0, maxClients);
     const demote = candidates.slice(maxClients);

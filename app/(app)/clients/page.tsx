@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { listClients } from "@/lib/data/clients";
+import { MakeActiveButton } from "./make-active-button";
 
 const VAT_LABELS: Record<string, string> = { vat: "VAT", non_vat: "Non-VAT", vat_exempt: "VAT-Exempt" };
 
@@ -74,6 +75,7 @@ export default async function ClientsPage({
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">VAT Status</th>
               <th className="px-4 py-3">Status</th>
+              {user.role === "firm_admin" && <th className="px-4 py-3" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -97,11 +99,16 @@ export default async function ClientsPage({
                     {c.status}
                   </span>
                 </td>
+                {user.role === "firm_admin" && (
+                  <td className="px-4 py-3">
+                    {c.status === "inactive" && <MakeActiveButton clientId={c.id} clientName={c.registeredName} />}
+                  </td>
+                )}
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={user.role === "firm_admin" ? 6 : 5} className="px-4 py-8 text-center text-slate-400">
                   No clients found.
                 </td>
               </tr>

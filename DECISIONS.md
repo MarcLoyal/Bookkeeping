@@ -3825,3 +3825,120 @@ anything in this one) — `bookkeeper@keepbooks.demo`'s pre-existing
 that fix landed. **Merge that fix before running this script's `--yes`
 path against any firm whose Bookkeeper might already be
 `access_scope: 'assigned'`** — the demo firm is exactly such a case.
+
+## Trial & Plan Limits, UI: platform admin controls + Owner-facing banner/swap
+
+Third layer, on top of #38 (backend). Pure UI over already-proven
+backend logic — no new business rules, no enforcement added here that
+wasn't already enforced at the DB level by `018`/`019`.
+
+**Audit logging, confirmed before building**: yes — and already done.
+`setFirmPlan()`/`extendFirmTrial()` (both from #38) already write
+`PLAN_CHANGE`/`TRIAL_EXTENDED` audit rows; this pass just surfaces
+those existing actions in the UI, no new logging needed.
+
+**Platform admin's expired-trial queue**
+(`/settings/platform-admins/trials`): lists every firm
+`listExpiredTrialFirms()` (`lib/data/platform-billing.ts`) finds with
+`trialExpiredFlaggedAt` set, oldest flag first, joined to its owner the
+same way `listFirmsForDashboard()` already does (earliest `firm_admin`
+row per firm). Reuses `StatCard` (`app/(app)/dashboard/stat-card.tsx`)
+for the one summary number and gets the sidebar/topbar shell for free
+just by living under `app/(app)/` — there's no separately-importable
+"SidebarShell" component (it's a private, unexported function inside
+`app/(app)/layout.tsx`); every page in that route group already gets
+it, which *is* the reuse.
+
+Per firm, three actions:
+- **Downgrade to Free** — a genuine two-step preview/confirm, not a
+  static `confirm()` dialog: which 3 clients stay active depends on
+  real view-history data, so a static message couldn't actually say
+  what's about to happen. Required extracting
+  `selectDowngradeCandidates()`/`selectStaffToDeactivate()` out of
+  `downgradeFirmToFree()` (`lib/billing/downgrade-firm-to-free.ts`) so
+  a new read-only `previewDowngradeFirmToFree()` computes the *exact
+  same* clients/staff the real action then touches — sharing the query
+  rather than hand-writing a second one was the whole point: a preview
+  that could drift from reality would be worse than no preview.
+  Confirmed with a new test (`plan-limits-downgrade.test.ts`) that runs
+  the preview first, asserts it matches what the real downgrade
+  produces one test later, and asserts the dry run touched nothing.
+- **Extend trial** / **Change plan** — plain forms calling the
+  already-built `extendFirmTrial()`/`setFirmPlan()` directly. Change
+  Plan's dropdown deliberately only offers Basic/Premium/Enterprise —
+  not Trial or Free, which have their own dedicated flows (Extend
+  Trial, and Downgrade to Free / the day-8 flag) — matching what was
+  actually asked for. Enterprise reveals the three required custom
+  fields inline (`setFirmPlan`'s own Zod schema already requires them).
+
+**Owner-facing plan status banner** (`app/(app)/plan-status-banner.tsx`,
+wired into `AppLayout`'s `SidebarShell`): shown only to `firm_admin`,
+for exactly two situations — Free plan with 1+ read-only clients
+(post-downgrade state), or a trial within 2 days of `trialEndsAt`
+(including already past). Fetched in `AppLayout` itself (not just the
+Dashboard page) via a new lean `getFirmPlanStatus()`
+(`lib/data/firm-plan-status.ts`) so it's visible everywhere in the app,
+not just one page — wrapped in the same best-effort try/catch
+`recentClients` already uses there, since a banner failing to load is
+never a reason to fail the whole shell. No fabricated contact
+email/support address — the app has no existing "contact us" channel
+to reuse, so the banner just says "contact us," matching what actually
+exists today rather than inventing one.
+
+**"Make this client active" swap** (Clients list, `firm_admin` only):
+an inline "Make active" action per `inactive`-status row, calling the
+already-built `swapActiveClient()` directly. Uses a plain
+`window.confirm()`, not a preview like the downgrade action above
+needs — `swapActiveClient()` only ever touches at most one other
+client (whichever's gone longest without a view), a small, fixed blast
+radius unlike the downgrade's whole-firm effect, so a static confirm
+message plus an after-the-fact "X is now read-only" success line
+(straight from the function's own return value) is enough.
+
+**New tests**: `previewDowngradeFirmToFree()` (matches the real
+downgrade's outcome exactly, mutates nothing on its own) and
+`listExpiredTrialFirms()` (only flagged firms, oldest-flag-first
+ordering, owner join) — both added to
+`db/__tests__/plan-limits-downgrade.test.ts`. `pnpm test` 288/288 (285
+existing + 3 new), run twice. `tsc --noEmit` and `pnpm build` both
+clean — `/settings/platform-admins/trials` appears in the route list.
+No new migrations — this pass touches no schema or RLS.
+
+## Bug fix: Extend Trial 500 — `initialFormState`/`initialSwapState` exported from a `"use server"` file
+
+**Found in production** (Vercel logs): `Error: A "use server" file can
+only export async functions, found object.` Both new `actions.ts`
+files from the pass above (`app/(app)/settings/platform-admins/trials/
+actions.ts` and `app/(app)/clients/actions.ts`) exported a plain
+`const` object — `initialFormState`/`initialSwapState` — alongside the
+real Server Actions. Next.js's Server Actions compiler requires every
+top-level export of a `"use server"` module to be an async function;
+a data-only export like this is a hard error, not a warning — it just
+doesn't surface until the module is actually invoked at request time,
+not at `next build` (confirmed directly: `pnpm build` succeeded with
+the bug present, same as after the fix — this class of error is
+runtime-only in this Next version, exactly matching what reached
+Vercel as a live 500 rather than a failed deploy).
+
+**Fix**: moved each initial-state constant out of its `actions.ts` and
+into the one client component that used it
+(`expired-trial-row.tsx`/`make-active-button.tsx`), importing only the
+*type* from `actions.ts` (a type-only export is erased at compile time,
+never a real runtime export, so it's fine). This isn't a new pattern —
+it's the one `invite-form.tsx` and `archive-client-button.tsx` already
+use correctly (`const initialState: XState = {...}` defined locally,
+type imported from `./actions`); the two new files in the previous
+pass simply didn't match it. `clients/actions.ts`'s `initialSwapState`
+had the identical bug but hadn't been clicked yet — fixed alongside the
+one that actually crashed, not left for a second report.
+
+**Verified**: grepped every `"use server"` file in the app for a
+top-level `export const`/`let`/`var` — none remain outside these two,
+now fixed. Full browser click-through wasn't possible in this sandbox
+(no real Supabase project configured here, so the platform-admin login
+needed to reach the button can't complete) — this fix is otherwise
+confirmed by exact structural parity with the two already-working
+files above, not by re-observing the crash and its absence live.
+`pnpm test` 288/288, `tsc --noEmit` and `pnpm build` both clean (build
+was clean before this fix too, per the note above — it was never a
+useful signal for this particular bug).

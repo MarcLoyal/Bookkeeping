@@ -1,10 +1,12 @@
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
+import { AlertTriangle, History, LayoutDashboard, Percent, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import type { Role } from "@/lib/auth/current-user";
 import { getRecentClientsForUser, type RecentClientRow } from "@/lib/data/clients";
+import { getFirmPlanStatus, type FirmPlanStatus } from "@/lib/data/firm-plan-status";
 import { logoutAction } from "./logout-action";
+import { PlanStatusBanner } from "./plan-status-banner";
 
 const ROLE_LABELS: Record<string, string> = {
   firm_admin: "Owner",
@@ -21,6 +23,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon };
 const PLATFORM_ADMIN_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/settings/platform-admins", label: "Platform Admins", icon: ShieldCheck },
+  { href: "/settings/platform-admins/trials", label: "Expired Trials", icon: AlertTriangle },
 ];
 
 /**
@@ -63,12 +66,15 @@ function SidebarShell({
   user,
   navItems,
   recentClients,
+  planStatus,
   children,
 }: {
   user: { name: string; role: Role };
   navItems: NavItem[];
   /** Every firm-staff role (not platform_admin, which has no per-client "clients" in this sense) — see getRecentClientsForUser's own doc comment for what "recent" means here. Undefined/empty just renders no section at all. */
   recentClients?: RecentClientRow[];
+  /** Owner (firm_admin) only — see AppLayout below. undefined for every other role, which PlanStatusBanner renders as nothing. */
+  planStatus?: FirmPlanStatus | null;
   children: React.ReactNode;
 }) {
   return (
@@ -121,7 +127,10 @@ function SidebarShell({
             <SignOutButton />
           </div>
         </header>
-        <main className="flex-1 px-6 py-6">{children}</main>
+        <main className="flex-1 px-6 py-6">
+          {planStatus !== undefined && <PlanStatusBanner status={planStatus} />}
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -175,8 +184,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         recentClients = undefined;
       }
     }
+
+    // Owner only — "Banner shown to the Owner" (see PlanStatusBanner's own
+    // doc comment). Best-effort, same reasoning as recentClients above:
+    // this notice failing to load is never a reason to fail the page.
+    let planStatus: FirmPlanStatus | null | undefined;
+    if (user.role === "firm_admin") {
+      try {
+        planStatus = await getFirmPlanStatus(user.id);
+      } catch (err) {
+        console.error("[AppLayout] getFirmPlanStatus failed", { userId: user.id, err });
+        planStatus = undefined;
+      }
+    }
+
     return (
-      <SidebarShell user={user} navItems={navItems} recentClients={recentClients}>
+      <SidebarShell user={user} navItems={navItems} recentClients={recentClients} planStatus={planStatus}>
         {children}
       </SidebarShell>
     );
