@@ -74,7 +74,15 @@ async function upsertUser(id: string, email: string, role: string, accessScope: 
 }
 
 beforeAll(async () => {
-  await ownerDb.insert(schema.firms).values({ id: FIRM_ID, name: "RLS Test Firm" }).onConflictDoNothing();
+  // maxClients/maxUsers high enough that this file's many role fixtures
+  // never trip 018_plan_limits.sql's triggers — plan limits aren't what
+  // this file tests. onConflictDoUpdate, not onConflictDoNothing: a firm
+  // row left over from before 018 existed would otherwise keep its
+  // backfilled trial-tier defaults (max_users 5) forever.
+  await ownerDb
+    .insert(schema.firms)
+    .values({ id: FIRM_ID, name: "RLS Test Firm", plan: "enterprise", maxClients: 1000, maxUsers: 1000 })
+    .onConflictDoUpdate({ target: schema.firms.id, set: { maxClients: 1000, maxUsers: 1000 } });
 
   for (const [id, name] of [
     [CLIENT_ASSIGNED_ID, "RLS Test Client (Assigned)"],

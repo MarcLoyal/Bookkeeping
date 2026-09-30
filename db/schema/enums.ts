@@ -123,3 +123,12 @@ export const payrollRunTypeEnum = pgEnum("payroll_run_type", ["regular", "thirte
 // and never changed. NULL for rows that predate this column (demo seed
 // data, platform admins) or aren't a firm's owner at all.
 export const signupMethodEnum = pgEnum("signup_method", ["email", "google"]);
+
+// A firm's billing plan — see lib/billing/plan-limits.ts for what each
+// tier actually allows (client/user counts, per-client assignment) and
+// db/sql/018_plan_limits.sql for the DB-level triggers that enforce those
+// numbers regardless of what the UI does. "trial" is time-boxed
+// (firms.trialEndsAt); every other value has no expiry of its own.
+// "enterprise" has no fixed limits in code — firms.maxClients/maxUsers are
+// set by hand per firm (no self-serve enterprise signup exists).
+export const firmPlanEnum = pgEnum("firm_plan", ["trial", "free", "basic", "premium", "enterprise"]);
