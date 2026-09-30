@@ -4135,3 +4135,220 @@ take it further. `tsc --noEmit` and `pnpm build` both clean with this
 file added; `pnpm test` unaffected (308/308) — this script has no test
 of its own, since its whole job is exercising the real network path
 `lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.
+
+## AI receipt/invoice capture, PR 3: mobile capture UI + draft creation
+
+Third of four PRs. Wires PR 1's Storage/`source_documents` foundation
+and PR 2's `extractReceiptData()` into an actual "Add Receipt" flow —
+photo in, a prefilled General Journal **draft** out, never posted
+directly. Merged before PR 2's own live-image verification could
+happen (no funds for `ANTHROPIC_API_KEY` credit yet) — per your
+instruction, that verification now happens as one combined live test
+of the whole photo → extraction → draft flow once funds are in place,
+rather than twice.
+
+**Draft target confirmed as General Journal, not a specialized
+document table**: `purchases_write`/`cash_disbursements_write`
+(`009_team_roles_rls.sql`) are `firm_admin`/`bookkeeper` only — Encoder
+has zero write access to those tables. Since Encoder is one of the
+three roles this feature is for, the AI-prefilled draft has to land in
+`journal_entries` (reusing the exact same draft path Encoder's manual
+entry already uses), not a new specialized-table draft concept. This
+was flagged as a real design question during scoping and resolved by
+the RLS the codebase already has, not by adding anything new.
+
+**`GeneralJournalForm` extended, not forked**: added an optional
+`sourceDocumentId` prop (included in the submit body only when given)
+and a `initialValues` cross-cut fix — the existing "balanced" check
+only compared debit/credit totals, which the AI-prefill flow breaks
+because it starts with a debit row and a credit row for the *same*
+amount but no account chosen on either yet (a photo can tell you the
+total, never which two accounts it belongs to). Without this fix the
+Save button would enable itself the moment amounts happened to match,
+even with zero accounts picked, and fail with a generic validation
+error on submit. Now the check also requires every amount-filled row
+to have an account before it's considered submittable.
+
+**`lib/data/source-documents.ts`**: `createSourceDocument()`, an
+ordinary `withUserContext` write (not `authDb`) — the uploader already
+has legitimate INSERT access under `source_documents_insert`
+(020_source_documents_rls.sql); no bypass needed, same reasoning
+`swapActiveClient()` gives for the same choice.
+
+**`POST /api/clients/[id]/receipts/extract`**: a Route Handler, not a
+Server Action — same reason `draft-journal`'s own route is one (see
+`lib/use-json-post.ts`'s doc comment: this app's Server Actions can
+lose the request's session during an internal redirect-streaming
+pass). Records the `source_documents` row first (durable regardless of
+what happens next), then reads the just-uploaded image back from
+Storage server-side and runs it through `extractReceiptData()`. A
+Storage-download failure still returns HTTP 200 with an `ok:false`
+extraction, never an error response — the row and the upload already
+succeeded, so the client's job either way is to open a draft form with
+that image attached, prefilled or blank.
+
+**Bug caught before it shipped**: `extractReceiptData()`'s money
+fields are `Centavos` (`bigint`), and `NextResponse.json()` throws
+outright on a raw `bigint` ("Do not know how to serialize a BigInt").
+The route serializes every centavos field to its plain decimal-string
+form before responding; the client converts back with `BigInt(str)`.
+Caught by writing the route and thinking through its actual JSON
+output, not by a test — genuinely no automated check in this codebase
+would have caught it before a live request did.
+
+**`ReceiptCaptureForm`** (`app/(app)/clients/[id]/transactions/new/
+[type]/receipt-capture-form.tsx`): `<input type="file" accept="image/*"
+capture="environment">` — the standard, no-new-dependency way to open
+a phone's native camera through the browser (falls back to a plain
+file picker on desktop). Every captured photo is re-encoded to JPEG at
+≤2000px on its longest side via `createImageBitmap` + `<canvas>` before
+upload — keeps the payload small regardless of the original photo's
+size, and is also what normalizes an iPhone's default HEIC capture
+into something Claude's vision API accepts (JPEG/PNG/WebP only).
+**Not guaranteed on every browser**: Safari/iOS can decode HEIC via the
+OS's own ImageIO framework, but this isn't universal — a decode failure
+is treated as a real, recoverable failure state ("try another photo" /
+"enter manually instead"), not assumed away.
+
+Three explicit phases (`capture` → `processing` → `ready`, with a
+`failed` branch offering the same two escape hatches): a hard failure
+anywhere in normalize/upload/extract-request never blocks creating the
+entry — "enter manually instead" always reaches the same
+`GeneralJournalForm`, just with nothing prefilled and no image
+attached, exactly the manual flow that already existed.
+
+**Confidence banner**: `ok:false` shows the extraction service's own
+(already user-facing) error text directly, no added wrapper text.
+`confidence: "low"` shows "Double-check this one" plus any `notes`.
+`confidence: "high"` shows a plain "review before saving" line — the
+review step is never skippable regardless of confidence, matching "AI
+extraction never posts directly."
+
+**Entry points, confirmed to match each role's actual navigation, not
+assumed**: added to the Transactions page's existing "+ New X" button
+row (`NEW_TX_TYPES`) — reachable by Owner/Bookkeeper exactly the way
+every other transaction type already is (Dashboard's `QuickPostPicker`
+→ transaction list → button). **Found a real gap for Encoder while
+checking this**: Encoder's dashboard has its own direct
+`EncoderClientPicker` ("+ Add Entry — pick a client…") that jumps
+*straight* to `new/general_journal`, bypassing the transaction list
+page entirely — so the new button there would have been unreachable
+from Encoder's primary add-entry affordance, only from the secondary
+"View transactions" picker. Added a new `EncoderReceiptPicker`
+mirroring `EncoderClientPicker` exactly, so Encoder gets an equally
+direct, one-tap "Add Receipt" path — not an enhancement, a parity fix
+required for the three-role requirement to actually hold for Encoder
+specifically.
+
+**New tests**: `db/__tests__/edit-delete-draft.test.ts` — 3 new tests:
+`sourceDocumentId` is attached when given, stays `null` for an
+ordinary draft that doesn't pass one (existing manual-entry flow
+unaffected), and survives `updateDraftGeneralJournal()`'s edit
+unchanged (that function's `UPDATE` never touches the column, so
+editing a draft can never detach its image). `pnpm test` 311/311 (308
+existing + 3 new), run twice. `tsc --noEmit` and `pnpm build` both
+clean — `/api/clients/[id]/receipts/extract` appears in the route
+list.
+
+**Not verifiable live in this sandbox** (same constraints as PR 1/PR
+2, now compounding): no real Supabase Storage bucket reachable here,
+no usable `ANTHROPIC_API_KEY`, and no real mobile browser to exercise
+`createImageBitmap`/canvas/camera capture against — none of
+`normalizeToJpeg()`, the Storage upload, or the extraction call can be
+exercised by an automated test in this environment. What *is* covered:
+every server-side data-layer change (`sourceDocumentId` persistence,
+the route's role gating and bigint-serialization fix) via the tests
+above, and `tsc`/`build` proving the whole thing compiles and every
+route resolves. The real test is the one you're planning: one combined
+photo → extraction → draft run once `ANTHROPIC_API_KEY` has credit.
+
+Not yet built: attachment display + polish (PR 4) — the entry detail
+page doesn't show the attached receipt image yet (draft or posted),
+though the FK and Storage object are already there waiting for it.
+
+## AI receipt/invoice capture: fair-use monthly scan cap
+
+Added to PR 3 before merge, at your explicit request — not a customer-
+facing pricing tier, a safety net so a bug or heavy misuse of the AI
+scan feature can't run up unexpected Anthropic API cost. Tracked the
+same way client/user plan limits already are (`018_plan_limits.sql`),
+not bolted on as something separate.
+
+**New column, not a new table**: `firms.max_ai_scans_per_month`
+(migration `0012_groovy_skreet.sql`), read through `getPlanLimits()`
+exactly like `maxClients`/`maxUsers` already are — same "reads the
+row's own columns, not a plan-name lookup" shape, so an enterprise
+firm's custom cap works with zero special-casing. Defaults: free 20,
+basic 150, trial 500, premium 500 (trial deliberately matches
+premium's cap — a trial firm gets full premium-level access, tested
+directly in `plan-limits.test.ts`). These are judgment calls per your
+instruction ("use your judgment given the schema"), sized to be well
+above any normal bookkeeper's realistic monthly usage.
+
+**Enforced by a `BEFORE INSERT` trigger on `source_documents`**
+(`023_ai_scan_plan_limit.sql`), not just hidden in the UI — matching
+`018_plan_limits.sql`'s own `enforce_client_plan_limit()`/
+`enforce_user_plan_limit()` pattern exactly. Counts `source_documents`
+rows created since the start of the current calendar month, scoped by
+firm through `clients.firm_id`; no separate "scan log" table needed
+since `source_documents` is only ever written by the AI receipt-
+capture flow (`createSourceDocument()`, called from `POST /api/
+clients/[id]/receipts/extract`) — one row per scan, already exactly
+the thing being capped. Rejects with a clear message ("Monthly AI scan
+limit reached (N per month on this firm's plan) — contact support to
+raise it.") rather than degrading or silently failing, per your
+instruction.
+
+**Fires before the expensive part happens, not after**: the trigger is
+`BEFORE INSERT` on `source_documents`, and `createSourceDocument()` is
+called before the route ever calls `extractReceiptData()` — so once
+the cap is hit, the Anthropic API call this cap exists to bound never
+happens. The one accepted side effect: the photo the browser already
+uploaded to Storage before calling the route stays there, unreferenced,
+when a scan is rejected this way. Storage cost isn't what this cap
+protects against, so an occasional orphaned image is a documented
+tradeoff, not a bug to design around.
+
+**`SECURITY DEFINER` — a real undercounting bug caught before it
+shipped**, same reasoning as `app_accessible_client_ids()`
+(`001_functions_triggers_rls.sql`): `source_documents_select`
+(`020_source_documents_rls.sql`) scopes Encoder to seeing only their
+*own* uploads. Without bypassing that RLS scoping inside the trigger's
+own COUNT query, the cap would have silently only ever counted an
+Encoder's own scans — correct only for a single-Encoder firm, wrong
+(undercounting the true firm-wide total) the moment more than one
+person at a firm uses this feature. Caught by explicitly tracing what
+RLS policy applies to the COUNT query under each calling role before
+applying the migration, not discovered live. Verified directly via
+`psql` (`pg_proc.prosecdef = t`) that the fix is actually active, not
+just present in the SQL file.
+
+**`set-firm-plan.ts`/`downgrade-firm-to-free.ts`**: both extended to
+read/write `maxAiScansPerMonth` alongside the existing limits — an
+enterprise firm now requires it explicitly (same "enterprise needs
+every limit specified, no silent default" rule the other two already
+enforced), and downgrading a firm to Free resets it to Free's 20/month
+cap along with the other two limits.
+
+**New tests**: 1 in `plan-limits.test.ts` (trial-matches-premium
+assertion), 1 in `plan-limits-downgrade.test.ts` ("enterprise requires
+maxAiScansPerMonth specifically"), and a new describe block in
+`source-documents-rls.test.ts` covering the trigger directly against a
+real Postgres: allows scans up to the cap across different roles at
+the same firm (proving the `SECURITY DEFINER` fix — an Encoder's scan
+counts toward, and is blocked by, scans an Owner made), rejects the
+scan that would exceed it with the exact contact-support message,
+confirms a previous month's scans don't count toward the current
+month's cap (via backdating `created_at` through a direct `UPDATE`),
+and confirms one firm's scan count never affects a different firm's
+cap. `pnpm test` 317/317 (311 existing + 6 new), run twice to confirm
+no leaked fixture state between runs. `tsc --noEmit` and `pnpm build`
+both clean — no new routes, this is a pure schema/trigger/business-
+logic addition to an already-existing route.
+
+**Still deferred to the same live verification as the rest of PR 3**:
+this cap has no way to be exercised by a live `ANTHROPIC_API_KEY` call
+in this sandbox (same constraint as PR 2/PR 3 above) — what's verified
+here is the trigger's own counting/rejection logic against a real
+Postgres instance directly, not the end-to-end route behavior once a
+real scan is blocked mid-flow.

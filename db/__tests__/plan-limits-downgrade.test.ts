@@ -239,6 +239,7 @@ describe("downgradeFirmToFree()", () => {
     expect(firm.maxClients).toBe(3);
     expect(firm.maxUsers).toBe(1);
     expect(firm.perClientAssignmentAllowed).toBe(false);
+    expect(firm.maxAiScansPerMonth).toBe(20);
     expect(firm.trialEndsAt).toBeNull();
     expect(firm.trialExpiredFlaggedAt).toBeNull();
   });
@@ -314,6 +315,7 @@ describe("setFirmPlan()", () => {
     expect(firm.maxClients).toBe(30);
     expect(firm.maxUsers).toBe(10);
     expect(firm.perClientAssignmentAllowed).toBe(true);
+    expect(firm.maxAiScansPerMonth).toBe(500);
   });
 
   it("moving to trial starts a fresh 7-day clock, not whatever trialEndsAt happened to already be on the row", async () => {
@@ -332,12 +334,31 @@ describe("setFirmPlan()", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("enterprise requires maxAiScansPerMonth specifically — omitting just that one still fails", async () => {
+    const result = await setFirmPlan(PLATFORM_ADMIN_ID, {
+      firmId: FIRM_ID,
+      plan: "enterprise",
+      maxClients: 250,
+      maxUsers: 60,
+      perClientAssignmentAllowed: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("enterprise with explicit limits sets exactly those, not any fixed tier's numbers", async () => {
-    const result = await setFirmPlan(PLATFORM_ADMIN_ID, { firmId: FIRM_ID, plan: "enterprise", maxClients: 250, maxUsers: 60, perClientAssignmentAllowed: true });
+    const result = await setFirmPlan(PLATFORM_ADMIN_ID, {
+      firmId: FIRM_ID,
+      plan: "enterprise",
+      maxClients: 250,
+      maxUsers: 60,
+      perClientAssignmentAllowed: true,
+      maxAiScansPerMonth: 5000,
+    });
     expect(result.ok).toBe(true);
     const [firm] = await ownerDb.select().from(schema.firms).where(eq(schema.firms.id, FIRM_ID));
     expect(firm.maxClients).toBe(250);
     expect(firm.maxUsers).toBe(60);
+    expect(firm.maxAiScansPerMonth).toBe(5000);
   });
 });
 

@@ -12,6 +12,7 @@ const BOOK_LABELS: Record<string, string> = {
 };
 
 const NEW_TX_TYPES = [
+  { type: "receipt", label: "Add Receipt" },
   { type: "sales_invoice", label: "Sales Invoice" },
   { type: "purchase", label: "Purchase" },
   { type: "cash_receipt", label: "Cash Receipt" },

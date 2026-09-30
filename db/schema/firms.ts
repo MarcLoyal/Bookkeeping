@@ -17,6 +17,13 @@ export const firms = pgTable("firms", {
   maxClients: integer("max_clients").notNull().default(10),
   maxUsers: integer("max_users").notNull().default(5),
   perClientAssignmentAllowed: boolean("per_client_assignment_allowed").notNull().default(true),
+  // A fair-use safety net, not a customer-facing pricing tier — generous
+  // enough that no normal bookkeeper hits it, there only to bound
+  // unexpected Anthropic API cost from a bug or heavy misuse. Enforced
+  // by db/sql/023_ai_scan_plan_limit.sql the same way every other plan
+  // number here is: a real column, checked by a trigger, not just an
+  // app-layer suggestion.
+  maxAiScansPerMonth: integer("max_ai_scans_per_month").notNull().default(500),
   // Only meaningful while plan = 'trial'. NULL for every other plan.
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
   // Set once, the first time a lazy check (getCurrentUser(), see

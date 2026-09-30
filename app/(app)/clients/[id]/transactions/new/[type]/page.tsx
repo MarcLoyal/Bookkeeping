@@ -7,6 +7,7 @@ import { SalesInvoiceForm } from "./sales-invoice-form";
 import { PurchaseForm } from "./purchase-form";
 import { CashForm } from "./cash-form";
 import { GeneralJournalForm } from "./general-journal-form";
+import { ReceiptCaptureForm } from "./receipt-capture-form";
 
 const TITLES: Record<string, string> = {
   sales_invoice: "New Sales Invoice",
@@ -14,6 +15,7 @@ const TITLES: Record<string, string> = {
   cash_receipt: "New Cash Receipt",
   cash_disbursement: "New Cash Disbursement",
   general_journal: "New General Journal Entry",
+  receipt: "Add Receipt",
 };
 
 export default async function NewTransactionPage({
@@ -29,11 +31,14 @@ export default async function NewTransactionPage({
   // INSERT policy at all for viewer, no unattributed INSERT for reviewer),
   // but a role that can never submit this form shouldn't reach it.
   if (user.role === "reviewer" || user.role === "viewer") redirect(`/clients/${id}/transactions`);
-  // Encoder only has the draft general-journal flow for now — the four
-  // specialized document forms below always post immediately (no draft
-  // path exists for them yet, see createDraftGeneralJournal's doc
-  // comment), which an encoder can never do.
-  if (user.role === "encoder" && type !== "general_journal") redirect(`/clients/${id}/transactions/new/general_journal`);
+  // Encoder only has the draft general-journal flow (plain, or AI-
+  // prefilled from a receipt photo — both create the exact same kind of
+  // draft) for now — the four specialized document forms below always
+  // post immediately (no draft path exists for them yet, see
+  // createDraftGeneralJournal's doc comment), which an encoder can never do.
+  if (user.role === "encoder" && type !== "general_journal" && type !== "receipt") {
+    redirect(`/clients/${id}/transactions/new/general_journal`);
+  }
 
   const [accounts, contacts, vatRateStr] = await Promise.all([
     listAccounts(user.id, id),
@@ -62,6 +67,7 @@ export default async function NewTransactionPage({
         {type === "general_journal" && (
           <GeneralJournalForm clientId={id} accounts={accounts} mode={user.role === "encoder" ? "draft" : "post"} />
         )}
+        {type === "receipt" && <ReceiptCaptureForm clientId={id} accounts={accounts} />}
       </div>
     </div>
   );

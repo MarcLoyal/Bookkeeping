@@ -15,10 +15,16 @@ export const setFirmPlanSchema = z
     maxClients: z.number().int().positive().optional(),
     maxUsers: z.number().int().positive().optional(),
     perClientAssignmentAllowed: z.boolean().optional(),
+    maxAiScansPerMonth: z.number().int().positive().optional(),
   })
-  .refine((v) => v.plan !== "enterprise" || (v.maxClients && v.maxUsers && v.perClientAssignmentAllowed !== undefined), {
-    message: "Enterprise plans need maxClients, maxUsers, and perClientAssignmentAllowed set explicitly.",
-  });
+  .refine(
+    (v) =>
+      v.plan !== "enterprise" ||
+      (v.maxClients && v.maxUsers && v.perClientAssignmentAllowed !== undefined && v.maxAiScansPerMonth),
+    {
+      message: "Enterprise plans need maxClients, maxUsers, perClientAssignmentAllowed, and maxAiScansPerMonth set explicitly.",
+    }
+  );
 
 export type SetFirmPlanResult = { ok: true } | { ok: false; error: string };
 
@@ -53,9 +59,14 @@ export async function setFirmPlan(platformAdminId: string, input: unknown): Prom
   const [firm] = await authDb.select().from(firms).where(eq(firms.id, firmId));
   if (!firm) return { ok: false, error: "Firm not found." };
 
-  const limits: { maxClients: number; maxUsers: number; perClientAssignmentAllowed: boolean } =
+  const limits: { maxClients: number; maxUsers: number; perClientAssignmentAllowed: boolean; maxAiScansPerMonth: number } =
     plan === "enterprise"
-      ? { maxClients: parsed.data.maxClients!, maxUsers: parsed.data.maxUsers!, perClientAssignmentAllowed: parsed.data.perClientAssignmentAllowed! }
+      ? {
+          maxClients: parsed.data.maxClients!,
+          maxUsers: parsed.data.maxUsers!,
+          perClientAssignmentAllowed: parsed.data.perClientAssignmentAllowed!,
+          maxAiScansPerMonth: parsed.data.maxAiScansPerMonth!,
+        }
       : PLAN_DEFAULTS[plan as Exclude<FirmPlan, "enterprise">];
 
   // Moving TO 'trial' (including "give them another trial" after they'd
