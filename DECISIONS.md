@@ -4259,3 +4259,45 @@ hand-set number from those, never derived from `PLAN_DEFAULTS`, so
 there was nothing else to "propagate." `pnpm test` 308/308, `tsc
 --noEmit` and `pnpm build` both clean. Still a draft PR, not merged —
 same pending-your-approval status as before.
+
+## Receipt-capture marketing copy, on a separate PR from Pricing/FAQ and from the feature itself
+
+Third PR in this small cluster, branched off `claude/pricing-faq-pages`
+(after its price update above) rather than off `main` or off PR #43 —
+per your explicit instruction to keep this announcement copy separate
+from both the base Pricing/FAQ pages and the still-unmerged receipt-
+capture feature PR itself. PR #43 stays scoped to backend/UI/camera
+capture only, untouched by this change (confirmed via
+`git diff --stat origin/main origin/claude/receipt-capture-ui` — no
+marketing/pricing/faq files appear in it).
+
+**Pricing page**: one short line (`RECEIPT_CAPTURE_HIGHLIGHT` in
+`pricing-config.ts`), not a bullet repeated across all three tier
+cards — matches what was actually asked for ("a short line"). Placed
+between the hero copy and the trial callout, with a small "New" badge.
+Deliberately generic: no scan-count numbers, no mention of
+`firms.maxAiScansPerMonth` or its fair-use cap (both PR #43-specific
+details that may still change before that PR merges) — confirmed with
+a regex check (`/scan/i`) against the rendered page that no such number
+leaked in.
+
+**FAQ page**: one new Q&A ("Can I just take a photo of a receipt
+instead of entering it manually?"), placed after the team-members
+question and before the referral one. The answer states plainly that
+nothing posts automatically — a bookkeeper still reviews and confirms
+every draft — and that an unclear photo or uncertain figure gets
+flagged rather than silently guessed, matching PR #43's actual design
+(`extractReceiptData()` never auto-posts; the capture form's confidence
+banner surfaces exactly this). Written to stay true regardless of which
+PR merges first, same reasoning as the pricing line above.
+
+**Verified**: rendered both pages directly (same `react-dom/server`
+approach as the original Pricing/FAQ PR, for the same reason — this
+sandbox still has no Supabase credentials to run `next dev`) and
+confirmed the new copy appears, the prices from the previous commit are
+untouched, and no scan-count language leaked in. `pnpm test` 308/308
+(unchanged — pure copy, no new logic), `tsc --noEmit` and `pnpm build`
+both clean.
+
+Opened as its own draft PR, not merged — same pending-your-approval
+status as the other two in this cluster.
