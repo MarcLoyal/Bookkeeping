@@ -29,15 +29,15 @@ export default async function MarketingLayout({ children }: { children: React.Re
               FAQ
             </Link>
             {user ? (
-              <Link href="/dashboard" className="rounded-md bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-800">
+              <Link href="/dashboard" prefetch={false} className="rounded-md bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-800">
                 Go to Dashboard
               </Link>
             ) : (
               <>
-                <Link href="/login" className="hover:text-slate-900">
+                <Link href="/login" prefetch={false} className="hover:text-slate-900">
                   Log in
                 </Link>
-                <Link href="/signup" className="rounded-md bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-800">
+                <Link href="/signup" prefetch={false} className="rounded-md bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-800">
                   Start free trial
                 </Link>
               </>
@@ -59,15 +59,15 @@ export default async function MarketingLayout({ children }: { children: React.Re
               FAQ
             </Link>
             {user ? (
-              <Link href="/dashboard" className="hover:text-slate-900">
+              <Link href="/dashboard" prefetch={false} className="hover:text-slate-900">
                 Go to Dashboard
               </Link>
             ) : (
               <>
-                <Link href="/login" className="hover:text-slate-900">
+                <Link href="/login" prefetch={false} className="hover:text-slate-900">
                   Log in
                 </Link>
-                <Link href="/signup" className="hover:text-slate-900">
+                <Link href="/signup" prefetch={false} className="hover:text-slate-900">
                   Create your firm
                 </Link>
               </>

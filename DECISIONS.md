@@ -4337,3 +4337,91 @@ the header's `/pricing` link, per follow-up feedback — no other change
 (still `href="/pricing"`, still Owner-only, still the same `text-xs`
 muted styling). "FAQ" is unchanged. Re-verified: `pnpm test` 308/308,
 `tsc --noEmit` and `pnpm build` both clean.
+
+### Bug report: crash navigating dashboard → pricing → dashboard — investigated, not reproduced
+
+You reported a crash ("A server error occurred") on the preview
+deployment after: open `/dashboard` → click "Upgrade" → `/pricing` →
+click "Go to Dashboard" → crash. Asked me to reproduce it on the
+preview, pull the real Vercel function logs, and fix the confirmed
+root cause. I could not do the first two, and I'm recording exactly
+why and what I did instead, rather than guessing at a "fix" for a bug
+I never actually observed.
+
+**No Vercel access from this sandbox**: no `vercel` CLI, no
+`.vercel` project link, no `VERCEL_TOKEN`/API access, and no browser
+pointed at the live preview URL. Confirmed by checking for all of
+these directly rather than assuming — none exist here. I cannot open
+your preview deployment or read its Function/Runtime logs.
+
+**Built a real local repro harness instead of guessing**, since this
+sandbox also has no real `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` (the
+same long-standing limitation as every other PR in this project) —
+without one, `getCurrentUser()` never resolves a real session, so
+there was no way to even reach an authenticated `/dashboard` locally
+before now:
+1. A throwaway Node HTTP server standing in for Supabase's GoTrue
+   (`/auth/v1/token`, `/auth/v1/user`) returning a fixed user matching
+   the real seeded `admin@keepbooks.demo` (`firm_admin`) row already in
+   this sandbox's local Postgres.
+2. A script using the real `@supabase/ssr` `createServerClient` (the
+   exact library this app uses) to call `auth.setSession()` against
+   that fake server and capture the correctly chunked/encoded
+   `sb-*-auth-token` cookie it produces — this guarantees the cookie
+   is byte-for-byte what the real library would write, not a hand-
+   rolled guess at Supabase's cookie format.
+3. `.env.local` pointed at the fake server (temporarily — restored
+   from a backup immediately after; never committed), and Playwright
+   (the Chromium already pre-installed in this environment) driving a
+   real browser with that cookie through the exact reported sequence.
+
+**Confirmed the harness actually works**: the authenticated
+`/dashboard` render came back correctly as "Marc (Firm Admin) · Owner"
+— real proof this reproduces an authenticated session faithfully, not
+just a plausible-looking fake.
+
+**Ran the exact repro three ways, crash in none of them**:
+1. `next dev`, fresh session, the exact click sequence.
+2. `next build && next start` (a real production build, matching what
+   Vercel actually runs, not dev mode) — same sequence, same result.
+3. A specific, deliberate test of my leading hypothesis (a stale
+   client-side bundle from an older deploy colliding with a newer
+   server, since I'd pushed several commits to this branch in quick
+   succession right before this report — a well-known class of Next.js
+   App Router bug during active redeploys): loaded `/dashboard` then
+   `/pricing` on one build, rebuilt and restarted the server *without*
+   reloading the already-open browser tab (so its JS was now stale
+   relative to the server), then clicked "Go to Dashboard" from that
+   stale tab. Still no crash — Next.js recovered cleanly.
+
+**One real, defensible gap found and fixed regardless**: none of the
+`app/(marketing)/layout.tsx` links to `/dashboard`, `/login`, or
+`/signup` set `prefetch={false}`, unlike every comparable Link
+elsewhere in this app that points at a fully dynamic, per-user,
+cookie-gated page from a context where prefetching it has no real
+upside (the sidebar's own "Upgrade"/"FAQ" links already followed this
+pattern). Speculatively prefetching an auth-gated page from a public
+one is exactly the kind of thing that can produce a stale-cache/
+RSC-mismatch class of bug, so this is fixed as a reasonable hardening
+measure — but I want to be direct that I could not confirm this is
+what actually caused your crash, only that it removes a real, if
+unconfirmed, risk factor.
+
+**What I need to actually close this out**: the real error text from
+Vercel's Runtime/Function logs for that specific request (Vercel
+dashboard → this project → the preview deployment → Runtime Logs,
+filtered to around when it happened), or the error digest shown on
+the crash screen itself if the logs aren't handy — Next.js's
+production error screen usually includes a short digest hash that
+corresponds to exactly one server log entry. Without one of those, I
+have no way to distinguish "the prefetch fix above happened to solve
+it," "it was a one-off artifact of a mid-session redeploy while you
+were testing," or "there's a real bug I still haven't found."
+
+**Verified**: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build`
+both clean. All temporary local-only debugging infrastructure (the
+fake auth server, the cookie-minting script, the Playwright repro
+scripts, the temporary `.env.local` edit) was removed/restored before
+committing — `git status` confirms a clean diff containing only the
+`prefetch={false}` changes and this note. Still a draft PR, not
+merged.
