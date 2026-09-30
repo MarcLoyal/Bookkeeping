@@ -3743,3 +3743,35 @@ end date, refuses non-trial firms). `pnpm test` 283/283 (259 existing +
 21 new + 3 audit-label), run twice to confirm no leaked fixture state.
 `tsc --noEmit` and `pnpm build` both clean — no new routes in this
 backend-only pass.
+
+### Testing tool: `scripts/downgrade-firm-to-free.ts`
+
+Added so `downgradeFirmToFree()` has a real caller before the platform
+admin dashboard button (a later PR) exists — the only way to exercise
+it against a real database ahead of that. Reimplements the same logic
+as inline SQL rather than importing `lib/billing/downgrade-firm-to-
+free.ts` directly: every function in `lib/billing/` starts with
+`import "server-only"`, which throws unconditionally outside Next.js's
+own build (confirmed live — importing it from a plain `tsx` script
+fails immediately) — the same reason every other script in this
+directory (`create-platform-admin.ts`, etc.) reimplements its logic
+instead of importing from `lib/`. The real function's correctness is
+already covered directly by `db/__tests__/plan-limits-downgrade.test.ts`
+(runs under Vitest, where `vitest.config.ts` aliases `"server-only"` to
+a no-op stub) — this script's job is different: let a platform admin
+exercise the same behavior against real data before the button exists.
+
+Defaults to a dry run (prints exactly what would happen — which
+clients would stay active, which staff would be deactivated — touches
+nothing); `--yes` executes for real, atomically, and refuses to run
+unless the given email actually belongs to a `platform_admin` account.
+
+**Found a real, already-merged bug while dry/live-testing this against
+the seeded demo firm**: see "Bug fix:
+`enforce_per_client_assignment_allowed()` froze an already-`'assigned'`
+Bookkeeper's whole row" (separate PR, since it fixes `018`, not
+anything in this one) — `bookkeeper@keepbooks.demo`'s pre-existing
+`access_scope: 'assigned'` made the `--yes` path fail outright until
+that fix landed. **Merge that fix before running this script's `--yes`
+path against any firm whose Bookkeeper might already be
+`access_scope: 'assigned'`** — the demo firm is exactly such a case.
