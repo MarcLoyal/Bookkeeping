@@ -1,11 +1,33 @@
-import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { accessScopeEnum, signupMethodEnum, userRoleEnum } from "./enums";
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { accessScopeEnum, firmPlanEnum, signupMethodEnum, userRoleEnum } from "./enums";
 import { clients } from "./clients";
 
 export const firms = pgTable("firms", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   settings: jsonb("settings").notNull().default({}),
+  // plan/maxClients/maxUsers/perClientAssignmentAllowed are the actual
+  // source of truth enforced by db/sql/018_plan_limits.sql's triggers —
+  // getPlanLimits() (lib/billing/plan-limits.ts) just reads them off this
+  // row. Never derive limits from `plan` alone at read time: enterprise
+  // firms have no fixed numbers (set by hand per firm), and keeping the
+  // enforced values on the row means the DB trigger and the app read
+  // the exact same numbers, not two copies of a free/basic/premium table.
+  plan: firmPlanEnum("plan").notNull().default("trial"),
+  maxClients: integer("max_clients").notNull().default(10),
+  maxUsers: integer("max_users").notNull().default(5),
+  perClientAssignmentAllowed: boolean("per_client_assignment_allowed").notNull().default(true),
+  // Only meaningful while plan = 'trial'. NULL for every other plan.
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  // Set once, the first time a lazy check (getCurrentUser(), see
+  // lib/auth/current-user.ts) notices trialEndsAt has passed while still
+  // on the trial plan — the platform admin dashboard's downgrade queue
+  // reads this, not trialEndsAt directly, so a trial that's merely
+  // "past its date" but not yet actually reviewed stays distinguishable
+  // from one that's been flagged. Cleared (set back to NULL) whenever a
+  // platform admin changes the firm's plan away from 'trial', so a later
+  // trial (if ever re-granted) starts clean.
+  trialExpiredFlaggedAt: timestamp("trial_expired_flagged_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

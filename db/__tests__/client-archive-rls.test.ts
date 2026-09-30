@@ -46,7 +46,16 @@ async function resetStatus(status: "active" | "archived") {
 }
 
 beforeAll(async () => {
-  await ownerDb.insert(schema.firms).values({ id: FIRM_ID, name: "Archive RLS Test Firm" }).onConflictDoNothing();
+  // maxClients/maxUsers high enough that this file's 5 role fixtures
+  // never trip 018_plan_limits.sql's triggers — plan limits aren't what
+  // this file tests, and 5 users sits exactly at the trial-tier default
+  // (fragile). onConflictDoUpdate, not onConflictDoNothing: a firm row
+  // left over from before 018 existed would otherwise keep its
+  // backfilled trial-tier defaults forever.
+  await ownerDb
+    .insert(schema.firms)
+    .values({ id: FIRM_ID, name: "Archive RLS Test Firm", plan: "enterprise", maxClients: 1000, maxUsers: 1000 })
+    .onConflictDoUpdate({ target: schema.firms.id, set: { maxClients: 1000, maxUsers: 1000 } });
 
   await ownerDb
     .insert(schema.clients)

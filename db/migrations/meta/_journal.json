@@ -71,6 +71,13 @@
       "when": 1790709694332,
       "tag": "0009_watery_stick",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790748133372,
+      "tag": "0010_stiff_corsair",
+      "breakpoints": true
     }
   ]
 }

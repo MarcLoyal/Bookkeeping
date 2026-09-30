@@ -1,6 +1,7 @@
 import "server-only";
 import { authDb } from "@/db/authClient";
 import { auditLog, firms, users } from "@/db/schema";
+import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
 
 /**
  * Creates a new firm and its first user (role firm_admin) in one
@@ -25,7 +26,11 @@ export async function createFirmForUser(input: {
 }) {
   const { userId, email, name, firmName, signupMethod } = input;
   return authDb.transaction(async (tx) => {
-    const [firm] = await tx.insert(firms).values({ name: firmName }).returning();
+    const trialEndsAt = new Date(Date.now() + TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000);
+    const [firm] = await tx
+      .insert(firms)
+      .values({ name: firmName, plan: "trial", trialEndsAt, ...PLAN_DEFAULTS.trial })
+      .returning();
     await tx.insert(users).values({
       id: userId,
       firmId: firm.id,

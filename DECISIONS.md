@@ -3526,3 +3526,123 @@ added `auth.users`, ran the original unscoped query, got the identical
 query returns the correct single row against that same simulated
 collision. `tsc --noEmit`, `pnpm test` 242/242, `pnpm build` all
 clean.
+
+## Trial & Plan Limits, foundation: schema, getPlanLimits(), DB enforcement
+
+Next phase after Team & Roles. This PR is the foundation layer only —
+client/user count limits and per-client-assignment gating, enforced at
+the database level, not just hidden in the UI. Two deliberately
+separate follow-ups, not built here: (1) the day-8 trial-expiry flag
+plus the actual downgrade action (auto-pick 3 clients to stay active,
+deactivate excess staff, reuse the Team & Roles deactivate/reactivate
+mechanism), and (2) platform admin's manual "extend trial" / "change
+plan" controls. Both need this foundation to exist first.
+
+**Two decisions confirmed with you before writing any code** (asked
+directly, not assumed):
+1. The day-8 transition is **flag + manual**, not automatic — no
+   existing cron/scheduled-job infrastructure in this app at all (no
+   `vercel.json`, nothing), so "automatic" would have meant either
+   building that from scratch or (the actual plan for the next PR)
+   reusing the same lazy-check-on-request pattern every other
+   time-based feature here already uses (BIR deadlines widget,
+   activity health) — just for a flag, not the full downgrade, until
+   you've watched it run correctly a few times.
+2. Existing firms (no trial-start date on record) get backfilled as a
+   **fresh 7-day trial starting today**, not backdated to their own
+   `createdAt` — nobody loses access the moment this ships.
+
+**Schema** (`db/schema/firms.ts`): `plan` (`firmPlanEnum`: trial/free/
+basic/premium/enterprise), `maxClients`, `maxUsers`,
+`perClientAssignmentAllowed`, `trialEndsAt`, `trialExpiredFlaggedAt`.
+Deliberately NOT a plan-name-keyed lookup table read at enforcement
+time — the actual numbers live on the firm's own row, so
+`getPlanLimits()` (`lib/billing/plan-limits.ts`) and
+`018_plan_limits.sql`'s triggers check the *exact same values*, and
+an `enterprise` firm's hand-set custom limits (no fixed tier — "no
+self-serve signup needed yet") just work without a separate override
+mechanism. `PLAN_DEFAULTS` only matters when *assigning* a firm to a
+tier (new signup → trial; platform admin's future "change plan"
+action), never at read/enforcement time.
+
+**`lib/billing/plan-limits.ts`**: `PLAN_DEFAULTS` matching the agreed
+structure exactly (free 3/1/no-assignment, trial 10/5/assignment,
+basic 10/2/no-assignment, premium 30/10/assignment), `TRIAL_DURATION_
+DAYS = 7`, `getPlanLimits(firm)` — a one-line passthrough reading the
+firm row's own columns.
+
+**`db/sql/018_plan_limits.sql`** — three triggers:
+1. `enforce_client_plan_limit()` — BEFORE INSERT OR UPDATE ON clients.
+   Counts rows with `status IN ('onboarding','active')` against
+   `firms.max_clients`. The UPDATE half only re-fires when a row is
+   newly entering that counted set (was archived/inactive, now
+   onboarding/active) — an ordinary edit to an already-active client
+   never re-triggers it. Nothing in the app transitions a client OUT
+   of 'inactive' yet (see 017's own comment — that status has been
+   unused since it was added), so this half has no real caller today;
+   it exists now so the trial-expiry downgrade work has a proven
+   backstop to build against, not a promise to add later.
+2. `enforce_user_plan_limit()` — same shape, for `users`, counting
+   `active = true AND role != 'client_user'`. `platform_admin`
+   (`firm_id IS NULL`) and `client_user` (a client-portal login, not a
+   firm staff seat — no client portal exists yet) never count.
+   Reactivating a deactivated member re-checks the limit (the
+   "already counted" skip only applies when `OLD.active` was already
+   true) — exactly the gate a firm upgrading out of a downgrade needs:
+   raise the limit first, then reactivate.
+3. `enforce_per_client_assignment_allowed()` — BEFORE INSERT OR UPDATE
+   ON users, but deliberately scoped to `role = 'bookkeeper'` only,
+   not every role. Encoder/Reviewer/Viewer are already permanently
+   `access_scope = 'assigned'`, enforced by
+   `013_role_access_scope_check.sql`'s CHECK constraint — a rule that
+   predates this feature and has nothing to do with plan tier.
+   Bookkeeper is the only role where 'all' vs 'assigned' is a genuine,
+   currently-optional choice (at invite time and via the team page's
+   edit-assignments picker), so that's what "no per-client assignment"
+   actually gates. Applying this check to every role instead would
+   silently make Encoder/Reviewer/Viewer entirely uninvitable on
+   Free/Basic (both `perClientAssignmentAllowed = false`) — removing
+   three roles from two plans is a much bigger product decision than
+   "no per-client assignment" was asked to make, so not assumed.
+
+**Backfill**: `UPDATE firms SET trial_ends_at = now() + interval '7
+days' WHERE trial_ends_at IS NULL` — column-level `DEFAULT`s already
+cover `plan`/`maxClients`/`maxUsers`/`perClientAssignmentAllowed` for
+existing rows (all default to trial-tier values), so only
+`trial_ends_at` needed an explicit backfill.
+
+**`lib/auth/create-firm-for-user.ts`**: new firm signups now insert
+`plan: 'trial'`, `trialEndsAt: now + 7 days`, and
+`...PLAN_DEFAULTS.trial` explicitly, rather than relying on column
+defaults alone — the defaults exist for the migration's own backfill,
+not as the single source of truth for new-signup behavior.
+
+**Test fixture fallout**: three existing RLS test files
+(`team-roles-rls.test.ts`, `team-lifecycle-rls.test.ts`,
+`client-archive-rls.test.ts`) create more than 5 role fixtures per
+firm and started failing against the trial-tier default (`max_users =
+5`) the moment 018 applied — expected, since plan limits aren't what
+those files test. Fixed by giving each of those specific test firms
+generous (`enterprise`, 1000/1000) limits via `onConflictDoUpdate`
+rather than `onConflictDoNothing` — a firm row left over from before
+018 existed would otherwise keep its backfilled trial-tier defaults
+forever across repeated local test runs.
+
+**New tests**: `lib/__tests__/plan-limits.test.ts` (pure —
+`PLAN_DEFAULTS` matches the agreed structure, `getPlanLimits()` reads
+off the row rather than a lookup table) and
+`db/__tests__/plan-limits-rls.test.ts` (against the real
+schema-owning connection, like `acceptance.test.ts`'s immutability
+tests — these are table triggers, not RLS policies, so they fire
+regardless of which role is connected): Free/Basic/Premium/Enterprise
+client and user limits enforced at the exact boundary; archived/
+inactive clients don't count toward the limit; reactivating a client
+or user re-checks the limit; an ordinary edit never re-triggers
+either check; `platform_admin`/`client_user` never count as a seat;
+Bookkeeper's `access_scope` gated by `perClientAssignmentAllowed`,
+Encoder/Reviewer/Viewer unaffected regardless of plan; Enterprise's
+custom (non-tier) numbers are what's actually enforced.
+
+**Verified**: `pnpm test` 259/259 (242 existing + 17 new), run twice
+to confirm no leaked fixture state. `tsc --noEmit` and `pnpm build`
+both clean.
