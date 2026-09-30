@@ -144,6 +144,83 @@ describe("source_documents_select", () => {
   });
 });
 
+describe("enforce_ai_scan_plan_limit() — fair-use cap on AI scans per month", () => {
+  const CAP_FIRM_ID = "00000000-0000-4000-9800-000000000030";
+  const CAP_CLIENT_ID = "00000000-0000-4000-9800-000000000031";
+  const CAP_OWNER_ID = "00000000-0000-4000-9800-000000000032";
+  const CAP_ENCODER_ID = "00000000-0000-4000-9800-000000000033"; // access_scope 'assigned'
+
+  const OTHER_CAP_FIRM_ID = "00000000-0000-4000-9800-000000000034";
+  const OTHER_CAP_CLIENT_ID = "00000000-0000-4000-9800-000000000035";
+  const OTHER_CAP_OWNER_ID = "00000000-0000-4000-9800-000000000036";
+
+  beforeAll(async () => {
+    await ownerDb
+      .insert(schema.firms)
+      .values({ id: CAP_FIRM_ID, name: "AI Scan Cap Test Firm", maxAiScansPerMonth: 2 })
+      .onConflictDoUpdate({ target: schema.firms.id, set: { maxAiScansPerMonth: 2 } });
+    await ownerDb
+      .insert(schema.firms)
+      .values({ id: OTHER_CAP_FIRM_ID, name: "AI Scan Cap Test Firm (Other)", maxAiScansPerMonth: 1 })
+      .onConflictDoUpdate({ target: schema.firms.id, set: { maxAiScansPerMonth: 1 } });
+
+    await ownerDb
+      .insert(schema.clients)
+      .values([newClient(CAP_CLIENT_ID, CAP_FIRM_ID, "AI Scan Cap Client"), newClient(OTHER_CAP_CLIENT_ID, OTHER_CAP_FIRM_ID, "AI Scan Cap Client (Other Firm)")])
+      .onConflictDoNothing();
+    await ownerDb
+      .insert(schema.users)
+      .values([
+        { id: CAP_OWNER_ID, firmId: CAP_FIRM_ID, email: `${CAP_OWNER_ID}@test.local`, name: "Cap Owner", role: "firm_admin" },
+        { id: CAP_ENCODER_ID, firmId: CAP_FIRM_ID, email: `${CAP_ENCODER_ID}@test.local`, name: "Cap Encoder", role: "encoder", accessScope: "assigned" },
+        { id: OTHER_CAP_OWNER_ID, firmId: OTHER_CAP_FIRM_ID, email: `${OTHER_CAP_OWNER_ID}@test.local`, name: "Other Cap Owner", role: "firm_admin" },
+      ])
+      .onConflictDoNothing();
+    await ownerDb.insert(schema.userClientAssignments).values([{ userId: CAP_ENCODER_ID, clientId: CAP_CLIENT_ID }]).onConflictDoNothing();
+
+    // Clean slate for the counting tests below — this describe block's own
+    // fixture firm, not touching any other test file's data.
+    await ownerDb.delete(schema.sourceDocuments).where(eq(schema.sourceDocuments.clientId, CAP_CLIENT_ID));
+    await ownerDb.delete(schema.sourceDocuments).where(eq(schema.sourceDocuments.clientId, OTHER_CAP_CLIENT_ID));
+  });
+
+  it("allows scans up to the cap, counted across roles — not just the inserting user's own", async () => {
+    // First scan as Owner, second as Encoder: both must count toward the
+    // SAME firm-wide total for the third (by either role) to be rejected —
+    // this is exactly what the trigger's SECURITY DEFINER exists to prove,
+    // since source_documents_select would otherwise hide Owner's scan from
+    // an Encoder's own RLS-scoped view.
+    await withUserContext(CAP_OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(CAP_CLIENT_ID, CAP_OWNER_ID)));
+    await withUserContext(CAP_ENCODER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(CAP_CLIENT_ID, CAP_ENCODER_ID)));
+  });
+
+  it("rejects the scan that would exceed the cap, with a clear message", async () => {
+    await expect(
+      withUserContext(CAP_OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(CAP_CLIENT_ID, CAP_OWNER_ID)))
+    ).rejects.toThrow(/monthly ai scan limit reached/i);
+  });
+
+  it("a scan from a previous month doesn't count against the current month's cap", async () => {
+    // The two scans above already used up this firm's cap of 2 for the
+    // current month. Backdate one of them via a plain UPDATE (the trigger
+    // is BEFORE INSERT only, so this doesn't re-trigger it) to prove the
+    // count is genuinely calendar-month-scoped, not just "ever" — freeing
+    // up room for one more scan this month.
+    const [firstDoc] = await ownerDb.select().from(schema.sourceDocuments).where(eq(schema.sourceDocuments.clientId, CAP_CLIENT_ID)).limit(1);
+    await ownerDb.update(schema.sourceDocuments).set({ createdAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000) }).where(eq(schema.sourceDocuments.id, firstDoc.id));
+
+    await withUserContext(CAP_OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(CAP_CLIENT_ID, CAP_OWNER_ID)));
+  });
+
+  it("a different firm's cap and scan count are completely independent", async () => {
+    // OTHER_CAP_FIRM_ID's cap is 1 — unaffected by CAP_FIRM_ID's scans above.
+    await withUserContext(OTHER_CAP_OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(OTHER_CAP_CLIENT_ID, OTHER_CAP_OWNER_ID)));
+    await expect(
+      withUserContext(OTHER_CAP_OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(OTHER_CAP_CLIENT_ID, OTHER_CAP_OWNER_ID)))
+    ).rejects.toThrow(/monthly ai scan limit reached/i);
+  });
+});
+
 describe("journal_entries.source_document_id FK", () => {
   it("can be set to a real source_documents row and read back", async () => {
     const [doc] = await withUserContext(OWNER_ID, (tx) => tx.insert(schema.sourceDocuments).values(upload(CLIENT_ID, OWNER_ID)).returning());

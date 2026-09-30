@@ -102,7 +102,7 @@ export async function downgradeFirmToFree(platformAdminId: string, firmId: strin
   if (!firm) return { ok: false, error: "Firm not found." };
 
   return authDb.transaction(async (tx) => {
-    const { maxClients, maxUsers, perClientAssignmentAllowed } = PLAN_DEFAULTS.free;
+    const { maxClients, maxUsers, perClientAssignmentAllowed, maxAiScansPerMonth } = PLAN_DEFAULTS.free;
 
     // Most-recently-viewed first (across any user at the firm), oldest/
     // never-viewed last — the top `maxClients` stay active, matching
@@ -134,6 +134,7 @@ export async function downgradeFirmToFree(platformAdminId: string, firmId: strin
         maxClients,
         maxUsers,
         perClientAssignmentAllowed,
+        maxAiScansPerMonth,
         trialEndsAt: null,
         trialExpiredFlaggedAt: null,
       })

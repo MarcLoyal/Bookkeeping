@@ -4265,3 +4265,90 @@ photo → extraction → draft run once `ANTHROPIC_API_KEY` has credit.
 Not yet built: attachment display + polish (PR 4) — the entry detail
 page doesn't show the attached receipt image yet (draft or posted),
 though the FK and Storage object are already there waiting for it.
+
+## AI receipt/invoice capture: fair-use monthly scan cap
+
+Added to PR 3 before merge, at your explicit request — not a customer-
+facing pricing tier, a safety net so a bug or heavy misuse of the AI
+scan feature can't run up unexpected Anthropic API cost. Tracked the
+same way client/user plan limits already are (`018_plan_limits.sql`),
+not bolted on as something separate.
+
+**New column, not a new table**: `firms.max_ai_scans_per_month`
+(migration `0012_groovy_skreet.sql`), read through `getPlanLimits()`
+exactly like `maxClients`/`maxUsers` already are — same "reads the
+row's own columns, not a plan-name lookup" shape, so an enterprise
+firm's custom cap works with zero special-casing. Defaults: free 20,
+basic 150, trial 500, premium 500 (trial deliberately matches
+premium's cap — a trial firm gets full premium-level access, tested
+directly in `plan-limits.test.ts`). These are judgment calls per your
+instruction ("use your judgment given the schema"), sized to be well
+above any normal bookkeeper's realistic monthly usage.
+
+**Enforced by a `BEFORE INSERT` trigger on `source_documents`**
+(`023_ai_scan_plan_limit.sql`), not just hidden in the UI — matching
+`018_plan_limits.sql`'s own `enforce_client_plan_limit()`/
+`enforce_user_plan_limit()` pattern exactly. Counts `source_documents`
+rows created since the start of the current calendar month, scoped by
+firm through `clients.firm_id`; no separate "scan log" table needed
+since `source_documents` is only ever written by the AI receipt-
+capture flow (`createSourceDocument()`, called from `POST /api/
+clients/[id]/receipts/extract`) — one row per scan, already exactly
+the thing being capped. Rejects with a clear message ("Monthly AI scan
+limit reached (N per month on this firm's plan) — contact support to
+raise it.") rather than degrading or silently failing, per your
+instruction.
+
+**Fires before the expensive part happens, not after**: the trigger is
+`BEFORE INSERT` on `source_documents`, and `createSourceDocument()` is
+called before the route ever calls `extractReceiptData()` — so once
+the cap is hit, the Anthropic API call this cap exists to bound never
+happens. The one accepted side effect: the photo the browser already
+uploaded to Storage before calling the route stays there, unreferenced,
+when a scan is rejected this way. Storage cost isn't what this cap
+protects against, so an occasional orphaned image is a documented
+tradeoff, not a bug to design around.
+
+**`SECURITY DEFINER` — a real undercounting bug caught before it
+shipped**, same reasoning as `app_accessible_client_ids()`
+(`001_functions_triggers_rls.sql`): `source_documents_select`
+(`020_source_documents_rls.sql`) scopes Encoder to seeing only their
+*own* uploads. Without bypassing that RLS scoping inside the trigger's
+own COUNT query, the cap would have silently only ever counted an
+Encoder's own scans — correct only for a single-Encoder firm, wrong
+(undercounting the true firm-wide total) the moment more than one
+person at a firm uses this feature. Caught by explicitly tracing what
+RLS policy applies to the COUNT query under each calling role before
+applying the migration, not discovered live. Verified directly via
+`psql` (`pg_proc.prosecdef = t`) that the fix is actually active, not
+just present in the SQL file.
+
+**`set-firm-plan.ts`/`downgrade-firm-to-free.ts`**: both extended to
+read/write `maxAiScansPerMonth` alongside the existing limits — an
+enterprise firm now requires it explicitly (same "enterprise needs
+every limit specified, no silent default" rule the other two already
+enforced), and downgrading a firm to Free resets it to Free's 20/month
+cap along with the other two limits.
+
+**New tests**: 1 in `plan-limits.test.ts` (trial-matches-premium
+assertion), 1 in `plan-limits-downgrade.test.ts` ("enterprise requires
+maxAiScansPerMonth specifically"), and a new describe block in
+`source-documents-rls.test.ts` covering the trigger directly against a
+real Postgres: allows scans up to the cap across different roles at
+the same firm (proving the `SECURITY DEFINER` fix — an Encoder's scan
+counts toward, and is blocked by, scans an Owner made), rejects the
+scan that would exceed it with the exact contact-support message,
+confirms a previous month's scans don't count toward the current
+month's cap (via backdating `created_at` through a direct `UPDATE`),
+and confirms one firm's scan count never affects a different firm's
+cap. `pnpm test` 317/317 (311 existing + 6 new), run twice to confirm
+no leaked fixture state between runs. `tsc --noEmit` and `pnpm build`
+both clean — no new routes, this is a pure schema/trigger/business-
+logic addition to an already-existing route.
+
+**Still deferred to the same live verification as the rest of PR 3**:
+this cap has no way to be exercised by a live `ANTHROPIC_API_KEY` call
+in this sandbox (same constraint as PR 2/PR 3 above) — what's verified
+here is the trigger's own counting/rejection logic against a real
+Postgres instance directly, not the end-to-end route behavior once a
+real scan is blocked mid-flow.

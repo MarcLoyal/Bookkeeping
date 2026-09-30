@@ -1,0 +1,1 @@
+ALTER TABLE "firms" ADD COLUMN "max_ai_scans_per_month" integer DEFAULT 500 NOT NULL;
