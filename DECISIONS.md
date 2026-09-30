@@ -3526,3 +3526,18 @@ added `auth.users`, ran the original unscoped query, got the identical
 query returns the correct single row against that same simulated
 collision. `tsc --noEmit`, `pnpm test` 242/242, `pnpm build` all
 clean.
+
+### Removed: the diagnostic served its purpose
+
+Confirmed live on the real deployment: `current_user` = `keepbooks_app`,
+not superuser, not RLS-bypassing, RLS enabled on both `clients` and
+`users`. The open question from "Investigated: platform_admin rows and
+all-clients visible on /settings/team" is closed — the app's normal
+runtime connection was, and is, exactly what it was designed to be.
+
+Per this entry's own "deliberately temporary" note, both
+`app/(app)/settings/platform-admins/db-check/page.tsx` and
+`lib/data/db-connection-diagnostic.ts` are deleted — a raw role/RLS-
+bypass readout has no reason to exist in a shipping app, regardless of
+how it's gated. `tsc --noEmit`, `pnpm test` 242/242, `pnpm build` all
+clean; the removed route no longer appears in the build's route list.
