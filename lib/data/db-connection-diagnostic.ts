@@ -18,6 +18,15 @@ const EXPECTED_ROLE = "keepbooks_app";
  * MIGRATION_DATABASE_URL): which role is this app actually running
  * queries as, and does that role bypass RLS. Remove both this file and
  * that page once confirmed.
+ *
+ * clients_rls_enabled/users_rls_enabled MUST resolve via
+ * to_regclass('public.<table>') — pg_class.relname alone isn't
+ * schema-qualified, and a real Supabase project has auth.users
+ * alongside our public.users; matching bare `relname = 'users'`
+ * returns 2 rows there and the whole query throws "more than one row
+ * returned by a subquery used as an expression" (reproduced locally
+ * by adding a throwaway auth.users table). Never seen locally
+ * otherwise, since this sandbox's Postgres has no auth schema at all.
  */
 export async function getDbConnectionDiagnostic(currentAdminId: string): Promise<DbConnectionDiagnostic> {
   return withUserContext(currentAdminId, async (tx) => {
@@ -26,8 +35,8 @@ export async function getDbConnectionDiagnostic(currentAdminId: string): Promise
         current_user as current_user,
         (select rolsuper from pg_roles where rolname = current_user) as is_superuser,
         (select rolbypassrls from pg_roles where rolname = current_user) as bypasses_rls,
-        (select relrowsecurity from pg_class where relname = 'clients') as clients_rls_enabled,
-        (select relrowsecurity from pg_class where relname = 'users') as users_rls_enabled
+        (select relrowsecurity from pg_class where oid = to_regclass('public.clients')) as clients_rls_enabled,
+        (select relrowsecurity from pg_class where oid = to_regclass('public.users')) as users_rls_enabled
     `)) as unknown as {
       current_user: string;
       is_superuser: boolean;
