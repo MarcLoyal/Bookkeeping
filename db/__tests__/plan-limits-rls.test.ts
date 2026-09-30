@@ -224,6 +224,41 @@ describe("enforce_per_client_assignment_allowed(): Bookkeeper access_scope, gate
     expect(row.accessScope).toBe("assigned");
   });
 
+  it("bug fix (019): an already-'assigned' Bookkeeper's OTHER fields stay editable after their firm's plan stops allowing assignment", async () => {
+    // Reproduces a real bug found manually testing downgrade-firm-to-
+    // free.ts against a live database: the original trigger checked
+    // NEW.access_scope on every UPDATE, not just ones actually setting
+    // it to 'assigned' — so deactivating an already-'assigned'
+    // Bookkeeper failed once their firm's plan no longer allowed
+    // assignment, even though access_scope itself wasn't part of that
+    // update. Uses the Bookkeeper from the previous test, already
+    // access_scope 'assigned' on PREMIUM_FIRM_ID.
+    const bookkeeperId = "00000000-0000-4000-9900-000000000120";
+    await ownerDb.update(schema.firms).set({ perClientAssignmentAllowed: false }).where(eq(schema.firms.id, PREMIUM_FIRM_ID));
+    try {
+      await ownerDb.update(schema.users).set({ active: false }).where(eq(schema.users.id, bookkeeperId));
+      const [row] = await ownerDb.select().from(schema.users).where(eq(schema.users.id, bookkeeperId));
+      expect(row.active).toBe(false);
+      expect(row.accessScope).toBe("assigned"); // untouched, not silently reset to 'all'
+    } finally {
+      await ownerDb.update(schema.users).set({ active: true }).where(eq(schema.users.id, bookkeeperId));
+      await ownerDb.update(schema.firms).set({ perClientAssignmentAllowed: true }).where(eq(schema.firms.id, PREMIUM_FIRM_ID));
+    }
+  });
+
+  it("but actually setting access_scope to 'assigned' is still rejected once the firm doesn't allow it", async () => {
+    const bookkeeperId = "00000000-0000-4000-9900-000000000120";
+    await ownerDb.update(schema.users).set({ accessScope: "all" }).where(eq(schema.users.id, bookkeeperId));
+    await ownerDb.update(schema.firms).set({ perClientAssignmentAllowed: false }).where(eq(schema.firms.id, PREMIUM_FIRM_ID));
+    try {
+      await expect(
+        ownerDb.update(schema.users).set({ accessScope: "assigned" }).where(eq(schema.users.id, bookkeeperId))
+      ).rejects.toThrow(/does not allow per-client assignment/);
+    } finally {
+      await ownerDb.update(schema.firms).set({ perClientAssignmentAllowed: true }).where(eq(schema.firms.id, PREMIUM_FIRM_ID));
+    }
+  });
+
   it("Encoder/Reviewer/Viewer are unaffected by this check regardless of plan (already permanently 'assigned' by 013's CHECK constraint)", async () => {
     // Basic plan, perClientAssignmentAllowed = false — an Encoder here
     // must still succeed, since 013's CHECK already forces 'assigned'

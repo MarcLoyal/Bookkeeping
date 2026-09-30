@@ -3647,6 +3647,56 @@ custom (non-tier) numbers are what's actually enforced.
 to confirm no leaked fixture state. `tsc --noEmit` and `pnpm build`
 both clean.
 
+## Bug fix: `enforce_per_client_assignment_allowed()` froze an already-'assigned' Bookkeeper's whole row
+
+**Found manually**, exercising the not-yet-merged downgrade-to-Free
+action (PR #38) against a real database before merging: deactivating
+`bookkeeper@keepbooks.demo` — an existing Bookkeeper whose
+`access_scope` was already `'assigned'` from before this firm's plan
+stopped allowing it — failed with "This firm's plan does not allow
+per-client assignment," even though the `UPDATE` in question
+(`active = false`) never touched `access_scope` at all.
+
+**Root cause**: the trigger (`018_plan_limits.sql`, already merged)
+checked `NEW.access_scope` on every `UPDATE` to a Bookkeeper row,
+regardless of whether `access_scope` was the thing actually changing.
+Once a firm's `per_client_assignment_allowed` goes `false`, that froze
+every OTHER field on an already-`'assigned'` Bookkeeper's row too —
+renaming them, deactivating them, anything — not just a new attempt to
+set `'assigned'`. Never caught by `018`'s own tests
+(`db/__tests__/plan-limits-rls.test.ts`) because every fixture
+Bookkeeper in those tests started at the column default (`'all'`), so
+the trigger's stricter, buggier behavior was never actually exercised
+against a pre-existing `'assigned'` row.
+
+**Fix** (`db/sql/019_fix_per_client_assignment_trigger.sql`): only
+check when `access_scope` is actually transitioning TO `'assigned'`
+(`INSERT` with `'assigned'`, or `UPDATE` where `OLD.access_scope` was
+NOT already `'assigned'`) — the same "did the relevant thing change"
+guard `018`'s other two triggers already use for the clients/users
+plan-limit counts, just missed here originally. An existing
+`'assigned'` Bookkeeper under a plan that no longer allows it is now
+correctly left alone (not retroactively reset to `'all'`, not frozen
+from any other edit) until something explicitly tries to set
+`access_scope` to `'assigned'` again — which is still, correctly,
+rejected.
+
+**Verified**: reproduced the exact failing statement directly (flip a
+real firm's `per_client_assignment_allowed` to `false`, then attempt
+to deactivate its already-`'assigned'` Bookkeeper) — failed before this
+migration, succeeds after, state restored afterward. Two new tests in
+`plan-limits-rls.test.ts`: an already-`'assigned'` Bookkeeper's other
+fields stay editable once their firm's plan changes (and `access_scope`
+itself is untouched, not silently reset); actually setting
+`access_scope` to `'assigned'` is still correctly rejected. `pnpm test`
+261/261 (259 existing + 2 new), run twice. `tsc --noEmit` and
+`pnpm build` both clean.
+
+Separate PR from #38 (the downgrade action that surfaced this) since
+it fixes already-merged code (#37) and isn't specific to the downgrade
+flow — any write to a pre-existing `'assigned'` Bookkeeper's row under
+a non-assignment plan would have hit the same bug.
+
 ## Trial & Plan Limits, backend: day-8 flag, downgrade action, platform admin controls
 
 Second layer on top of the plan-limits foundation. Backend-only —
