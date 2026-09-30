@@ -18,11 +18,13 @@
     "create-platform-admin": "tsx scripts/create-platform-admin.ts",
     "delete-test-signup": "tsx scripts/delete-test-signup.ts",
     "downgrade-firm": "tsx scripts/downgrade-firm-to-free.ts",
+    "test-receipt-extraction": "tsx scripts/test-receipt-extraction.ts",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@aivangogh/ph-address": "^2026.2.3",
+    "@anthropic-ai/sdk": "^0.129.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
     "@tanstack/react-table": "^8.20.5",

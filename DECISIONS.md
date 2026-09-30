@@ -4037,3 +4037,101 @@ Not yet built (later PRs in this feature, per the confirmed
 breakdown): the Anthropic extraction service (PR 2), the mobile capture
 UI + draft creation (PR 3), and attachment display + polish (PR 4).
 Nothing in this PR is reachable from the UI yet.
+
+## AI receipt/invoice capture, PR 2: the Anthropic extraction service
+
+Second of four PRs. **Backend-only, no UI, no DB writes at all** —
+`lib/ai/extract-receipt.ts`'s `extractReceiptData()` takes an image and
+returns structured data; it does not import anything from `@/db` and
+cannot post or create a journal entry by construction, not just by
+convention. PR 3 wires its result into a draft entry a human still has
+to confirm.
+
+**Model**: pinned to `claude-haiku-4-5-20251001` (the dated snapshot,
+not the floating `claude-haiku-4-5` alias) — reading 4-5 fields off one
+receipt photo doesn't need Sonnet/Opus-level reasoning, and this runs
+per-image on an ongoing basis, so cost-efficiency actually matters here
+unlike a one-off task. Uses the `ANTHROPIC_API_KEY` already set in
+Vercel from August, per your confirmation.
+
+**Structured output via forced tool use**: a single
+`record_receipt_extraction` tool with `tool_choice: {type: "tool",
+name: ...}`, not freeform text parsing — guarantees Claude always
+returns JSON matching a fixed shape, never prose to regex out.
+
+**Never guesses — this is the load-bearing design choice**: every
+field except `confidence` is optional in the tool's `input_schema`,
+and the system/tool prompts both explicitly instruct "omit what you
+can't read, never guess." A field Claude does return still isn't
+trusted blindly: money strings go through the existing
+`pesosToCentavos()` (`lib/money.ts`) inside a try/catch, and dates
+through a strict `YYYY-MM-DD` regex — anything that fails either check
+is dropped to `null`, the extraction's `confidence` is force-downgraded
+to `"low"`, and a note is appended explaining what didn't parse. One
+bad field never poisons the good ones (a malformed total doesn't erase
+a correctly-read vendor name) and never fails the whole extraction —
+matches "return a clear low-confidence result, never guess," field by
+field, not just at the top level.
+
+Two distinct failure shapes, both `ok: false`, kept separate from a
+successful-but-low-confidence read: the Anthropic API call itself
+throwing (network/auth/rate-limit — wrapped in try/catch, logged
+server-side, generic message returned), and a malformed/missing
+tool-use response (defensive — `tool_choice` forces this in practice,
+but never assumed).
+
+**Not testable live in this sandbox**: no `ANTHROPIC_API_KEY` exists
+here (checked both `.env.local`, which has the key name but an empty
+value, and the process environment directly — only this session's own
+unrelated Claude Code infra vars are set, nothing usable as the app's
+key). Real verification of image quality/extraction accuracy has to
+happen against your Vercel deployment, same as Storage in PR 1.
+`extractReceiptData()`'s `client` parameter is injectable specifically
+so this doesn't block *unit* testing, though: every test in
+`lib/ai/__tests__/extract-receipt.test.ts` passes a fake object
+satisfying `Pick<Anthropic, "messages">` and never touches the network
+— full/partial extraction, a malformed total amount and a malformed
+date each independently downgrading confidence without discarding
+other good fields, the API-throws path, the no-tool-use path, and the
+failed-validation path.
+
+**New dependency**: `@anthropic-ai/sdk` (0.129.0).
+
+**New tests**: `lib/ai/__tests__/extract-receipt.test.ts`, 9 tests, all
+against the injected fake client. `pnpm test` 308/308 (299 existing + 9
+new), run twice. `tsc --noEmit` and `pnpm build` both clean — no new
+routes, this pass is backend-only.
+
+Not yet built: the mobile capture UI + draft creation (PR 3),
+attachment display + polish (PR 4). Nothing calls
+`extractReceiptData()` from anywhere reachable yet.
+
+### Testing tool: `scripts/test-receipt-extraction.ts`
+
+Added so you can exercise `extractReceiptData()` against a real receipt
+photo and the real `ANTHROPIC_API_KEY` before PR 3's upload flow
+exists — `pnpm test-receipt-extraction -- <path-to-image>`, prints the
+raw tool input Claude returned plus the fully parsed result (same shape
+`extractReceiptData()` returns). Entirely read-only against the API, no
+DB connection at all — safe to run repeatedly; each call is a small,
+real charge against the Anthropic API.
+
+Reimplements the tool schema/prompt/parsing logic inline rather than
+importing `extractReceiptData()` directly, for the exact same reason
+`scripts/downgrade-firm-to-free.ts` does: the real file starts with
+`import "server-only"`, which throws unconditionally outside Next.js's
+own build. Keeping that guard on the real file is deliberate (it's the
+same protection every credential-touching file in `lib/` has, and this
+one touches `ANTHROPIC_API_KEY`) — not something to remove just to make
+this script simpler. If the real function's schema/prompt/parsing logic
+ever changes, mirror the change here too, or delete this script once
+PR 3 gives you a real end-to-end path to test against instead.
+
+Verified in this sandbox only as far as the API-key boundary — no
+usable `ANTHROPIC_API_KEY` exists here (see PR 2's own note above), so
+running it here fails cleanly with "ANTHROPIC_API_KEY is not set." at
+exactly the point past which only your real key and a real image can
+take it further. `tsc --noEmit` and `pnpm build` both clean with this
+file added; `pnpm test` unaffected (308/308) — this script has no test
+of its own, since its whole job is exercising the real network path
+`lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.
