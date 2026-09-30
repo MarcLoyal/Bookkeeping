@@ -4105,3 +4105,33 @@ routes, this pass is backend-only.
 Not yet built: the mobile capture UI + draft creation (PR 3),
 attachment display + polish (PR 4). Nothing calls
 `extractReceiptData()` from anywhere reachable yet.
+
+### Testing tool: `scripts/test-receipt-extraction.ts`
+
+Added so you can exercise `extractReceiptData()` against a real receipt
+photo and the real `ANTHROPIC_API_KEY` before PR 3's upload flow
+exists — `pnpm test-receipt-extraction -- <path-to-image>`, prints the
+raw tool input Claude returned plus the fully parsed result (same shape
+`extractReceiptData()` returns). Entirely read-only against the API, no
+DB connection at all — safe to run repeatedly; each call is a small,
+real charge against the Anthropic API.
+
+Reimplements the tool schema/prompt/parsing logic inline rather than
+importing `extractReceiptData()` directly, for the exact same reason
+`scripts/downgrade-firm-to-free.ts` does: the real file starts with
+`import "server-only"`, which throws unconditionally outside Next.js's
+own build. Keeping that guard on the real file is deliberate (it's the
+same protection every credential-touching file in `lib/` has, and this
+one touches `ANTHROPIC_API_KEY`) — not something to remove just to make
+this script simpler. If the real function's schema/prompt/parsing logic
+ever changes, mirror the change here too, or delete this script once
+PR 3 gives you a real end-to-end path to test against instead.
+
+Verified in this sandbox only as far as the API-key boundary — no
+usable `ANTHROPIC_API_KEY` exists here (see PR 2's own note above), so
+running it here fails cleanly with "ANTHROPIC_API_KEY is not set." at
+exactly the point past which only your real key and a real image can
+take it further. `tsc --noEmit` and `pnpm build` both clean with this
+file added; `pnpm test` unaffected (308/308) — this script has no test
+of its own, since its whole job is exercising the real network path
+`lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.

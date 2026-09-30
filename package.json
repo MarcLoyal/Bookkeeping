@@ -18,6 +18,7 @@
     "create-platform-admin": "tsx scripts/create-platform-admin.ts",
     "delete-test-signup": "tsx scripts/delete-test-signup.ts",
     "downgrade-firm": "tsx scripts/downgrade-firm-to-free.ts",
+    "test-receipt-extraction": "tsx scripts/test-receipt-extraction.ts",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
