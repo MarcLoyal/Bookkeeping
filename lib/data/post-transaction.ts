@@ -408,6 +408,15 @@ export type GeneralJournalInput = {
   description: string;
   referenceNo?: string;
   lines: GeneralJournalLineInput[];
+  /**
+   * A source_documents row (the AI receipt-capture flow's uploaded image —
+   * see lib/data/source-documents.ts) to attach to this entry. Only
+   * meaningful for createDraftGeneralJournal below: postGeneralJournal
+   * (immediate post) never reads it, and updateDraftGeneralJournal's own
+   * UPDATE deliberately never touches this column either, so editing a
+   * draft can never detach or change its already-attached image.
+   */
+  sourceDocumentId?: string;
 };
 
 export async function postGeneralJournal(userId: string, input: GeneralJournalInput): Promise<string> {
@@ -473,6 +482,7 @@ export async function createDraftGeneralJournal(userId: string, input: GeneralJo
       referenceNo: input.referenceNo,
       status: "draft",
       createdBy: userId,
+      sourceDocumentId: input.sourceDocumentId,
     });
     await tx.insert(journalLines).values(
       lines.map((l, i) => ({

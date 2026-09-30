@@ -4135,3 +4135,133 @@ take it further. `tsc --noEmit` and `pnpm build` both clean with this
 file added; `pnpm test` unaffected (308/308) — this script has no test
 of its own, since its whole job is exercising the real network path
 `lib/ai/__tests__/extract-receipt.test.ts` deliberately avoids.
+
+## AI receipt/invoice capture, PR 3: mobile capture UI + draft creation
+
+Third of four PRs. Wires PR 1's Storage/`source_documents` foundation
+and PR 2's `extractReceiptData()` into an actual "Add Receipt" flow —
+photo in, a prefilled General Journal **draft** out, never posted
+directly. Merged before PR 2's own live-image verification could
+happen (no funds for `ANTHROPIC_API_KEY` credit yet) — per your
+instruction, that verification now happens as one combined live test
+of the whole photo → extraction → draft flow once funds are in place,
+rather than twice.
+
+**Draft target confirmed as General Journal, not a specialized
+document table**: `purchases_write`/`cash_disbursements_write`
+(`009_team_roles_rls.sql`) are `firm_admin`/`bookkeeper` only — Encoder
+has zero write access to those tables. Since Encoder is one of the
+three roles this feature is for, the AI-prefilled draft has to land in
+`journal_entries` (reusing the exact same draft path Encoder's manual
+entry already uses), not a new specialized-table draft concept. This
+was flagged as a real design question during scoping and resolved by
+the RLS the codebase already has, not by adding anything new.
+
+**`GeneralJournalForm` extended, not forked**: added an optional
+`sourceDocumentId` prop (included in the submit body only when given)
+and a `initialValues` cross-cut fix — the existing "balanced" check
+only compared debit/credit totals, which the AI-prefill flow breaks
+because it starts with a debit row and a credit row for the *same*
+amount but no account chosen on either yet (a photo can tell you the
+total, never which two accounts it belongs to). Without this fix the
+Save button would enable itself the moment amounts happened to match,
+even with zero accounts picked, and fail with a generic validation
+error on submit. Now the check also requires every amount-filled row
+to have an account before it's considered submittable.
+
+**`lib/data/source-documents.ts`**: `createSourceDocument()`, an
+ordinary `withUserContext` write (not `authDb`) — the uploader already
+has legitimate INSERT access under `source_documents_insert`
+(020_source_documents_rls.sql); no bypass needed, same reasoning
+`swapActiveClient()` gives for the same choice.
+
+**`POST /api/clients/[id]/receipts/extract`**: a Route Handler, not a
+Server Action — same reason `draft-journal`'s own route is one (see
+`lib/use-json-post.ts`'s doc comment: this app's Server Actions can
+lose the request's session during an internal redirect-streaming
+pass). Records the `source_documents` row first (durable regardless of
+what happens next), then reads the just-uploaded image back from
+Storage server-side and runs it through `extractReceiptData()`. A
+Storage-download failure still returns HTTP 200 with an `ok:false`
+extraction, never an error response — the row and the upload already
+succeeded, so the client's job either way is to open a draft form with
+that image attached, prefilled or blank.
+
+**Bug caught before it shipped**: `extractReceiptData()`'s money
+fields are `Centavos` (`bigint`), and `NextResponse.json()` throws
+outright on a raw `bigint` ("Do not know how to serialize a BigInt").
+The route serializes every centavos field to its plain decimal-string
+form before responding; the client converts back with `BigInt(str)`.
+Caught by writing the route and thinking through its actual JSON
+output, not by a test — genuinely no automated check in this codebase
+would have caught it before a live request did.
+
+**`ReceiptCaptureForm`** (`app/(app)/clients/[id]/transactions/new/
+[type]/receipt-capture-form.tsx`): `<input type="file" accept="image/*"
+capture="environment">` — the standard, no-new-dependency way to open
+a phone's native camera through the browser (falls back to a plain
+file picker on desktop). Every captured photo is re-encoded to JPEG at
+≤2000px on its longest side via `createImageBitmap` + `<canvas>` before
+upload — keeps the payload small regardless of the original photo's
+size, and is also what normalizes an iPhone's default HEIC capture
+into something Claude's vision API accepts (JPEG/PNG/WebP only).
+**Not guaranteed on every browser**: Safari/iOS can decode HEIC via the
+OS's own ImageIO framework, but this isn't universal — a decode failure
+is treated as a real, recoverable failure state ("try another photo" /
+"enter manually instead"), not assumed away.
+
+Three explicit phases (`capture` → `processing` → `ready`, with a
+`failed` branch offering the same two escape hatches): a hard failure
+anywhere in normalize/upload/extract-request never blocks creating the
+entry — "enter manually instead" always reaches the same
+`GeneralJournalForm`, just with nothing prefilled and no image
+attached, exactly the manual flow that already existed.
+
+**Confidence banner**: `ok:false` shows the extraction service's own
+(already user-facing) error text directly, no added wrapper text.
+`confidence: "low"` shows "Double-check this one" plus any `notes`.
+`confidence: "high"` shows a plain "review before saving" line — the
+review step is never skippable regardless of confidence, matching "AI
+extraction never posts directly."
+
+**Entry points, confirmed to match each role's actual navigation, not
+assumed**: added to the Transactions page's existing "+ New X" button
+row (`NEW_TX_TYPES`) — reachable by Owner/Bookkeeper exactly the way
+every other transaction type already is (Dashboard's `QuickPostPicker`
+→ transaction list → button). **Found a real gap for Encoder while
+checking this**: Encoder's dashboard has its own direct
+`EncoderClientPicker` ("+ Add Entry — pick a client…") that jumps
+*straight* to `new/general_journal`, bypassing the transaction list
+page entirely — so the new button there would have been unreachable
+from Encoder's primary add-entry affordance, only from the secondary
+"View transactions" picker. Added a new `EncoderReceiptPicker`
+mirroring `EncoderClientPicker` exactly, so Encoder gets an equally
+direct, one-tap "Add Receipt" path — not an enhancement, a parity fix
+required for the three-role requirement to actually hold for Encoder
+specifically.
+
+**New tests**: `db/__tests__/edit-delete-draft.test.ts` — 3 new tests:
+`sourceDocumentId` is attached when given, stays `null` for an
+ordinary draft that doesn't pass one (existing manual-entry flow
+unaffected), and survives `updateDraftGeneralJournal()`'s edit
+unchanged (that function's `UPDATE` never touches the column, so
+editing a draft can never detach its image). `pnpm test` 311/311 (308
+existing + 3 new), run twice. `tsc --noEmit` and `pnpm build` both
+clean — `/api/clients/[id]/receipts/extract` appears in the route
+list.
+
+**Not verifiable live in this sandbox** (same constraints as PR 1/PR
+2, now compounding): no real Supabase Storage bucket reachable here,
+no usable `ANTHROPIC_API_KEY`, and no real mobile browser to exercise
+`createImageBitmap`/canvas/camera capture against — none of
+`normalizeToJpeg()`, the Storage upload, or the extraction call can be
+exercised by an automated test in this environment. What *is* covered:
+every server-side data-layer change (`sourceDocumentId` persistence,
+the route's role gating and bigint-serialization fix) via the tests
+above, and `tsc`/`build` proving the whole thing compiles and every
+route resolves. The real test is the one you're planning: one combined
+photo → extraction → draft run once `ANTHROPIC_API_KEY` has credit.
+
+Not yet built: attachment display + polish (PR 4) — the entry detail
+page doesn't show the attached receipt image yet (draft or posted),
+though the FK and Storage object are already there waiting for it.

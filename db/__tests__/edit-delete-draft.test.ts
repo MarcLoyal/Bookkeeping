@@ -266,3 +266,72 @@ describe("deleteJournalEntry()", () => {
     await expect(deleteJournalEntry(BOOKKEEPER_ID, entryId)).rejects.toThrow(/immutable|reversing entry/i);
   });
 });
+
+describe("createDraftGeneralJournal(): sourceDocumentId (AI receipt capture)", () => {
+  const SOURCE_DOCUMENT_ID = "00000000-0000-4000-9600-000000000020";
+
+  beforeAll(async () => {
+    await ownerDb
+      .insert(schema.sourceDocuments)
+      .values({ id: SOURCE_DOCUMENT_ID, clientId: CLIENT_ID, storagePath: `${CLIENT_ID}/${SOURCE_DOCUMENT_ID}.jpg`, mimeType: "image/jpeg", uploadedBy: OWNER_ID })
+      .onConflictDoNothing();
+  });
+
+  it("attaches the given sourceDocumentId to the new draft", async () => {
+    const entryId = await createDraftGeneralJournal(OWNER_ID, {
+      clientId: CLIENT_ID,
+      entryDate: "2026-04-10",
+      description: "From a receipt photo",
+      lines: [
+        { accountCode: "ED-CASH", debitCentavos: 700n, creditCentavos: 0n },
+        { accountCode: "ED-AP", debitCentavos: 0n, creditCentavos: 700n },
+      ],
+      sourceDocumentId: SOURCE_DOCUMENT_ID,
+    });
+
+    const [row] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(row.sourceDocumentId).toBe(SOURCE_DOCUMENT_ID);
+  });
+
+  it("leaves sourceDocumentId null for an ordinary draft that doesn't pass one — existing manual-entry flow is unaffected", async () => {
+    const entryId = await createDraftGeneralJournal(OWNER_ID, {
+      clientId: CLIENT_ID,
+      entryDate: "2026-04-11",
+      description: "Ordinary manual draft, no photo",
+      lines: [
+        { accountCode: "ED-CASH", debitCentavos: 300n, creditCentavos: 0n },
+        { accountCode: "ED-AP", debitCentavos: 0n, creditCentavos: 300n },
+      ],
+    });
+
+    const [row] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(row.sourceDocumentId).toBeNull();
+  });
+
+  it("editing the draft never detaches its source document — updateDraftGeneralJournal's UPDATE never touches that column", async () => {
+    const entryId = await createDraftGeneralJournal(OWNER_ID, {
+      clientId: CLIENT_ID,
+      entryDate: "2026-04-12",
+      description: "From a receipt photo, about to be edited",
+      lines: [
+        { accountCode: "ED-CASH", debitCentavos: 800n, creditCentavos: 0n },
+        { accountCode: "ED-AP", debitCentavos: 0n, creditCentavos: 800n },
+      ],
+      sourceDocumentId: SOURCE_DOCUMENT_ID,
+    });
+
+    await updateDraftGeneralJournal(OWNER_ID, entryId, {
+      clientId: CLIENT_ID,
+      entryDate: "2026-04-13",
+      description: "Edited after AI prefill",
+      lines: [
+        { accountCode: "ED-CASH", debitCentavos: 850n, creditCentavos: 0n },
+        { accountCode: "ED-AP", debitCentavos: 0n, creditCentavos: 850n },
+      ],
+    });
+
+    const [row] = await ownerDb.select().from(schema.journalEntries).where(eq(schema.journalEntries.id, entryId));
+    expect(row.sourceDocumentId).toBe(SOURCE_DOCUMENT_ID);
+    expect(row.description).toBe("Edited after AI prefill");
+  });
+});

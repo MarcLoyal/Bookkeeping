@@ -18,6 +18,8 @@ const schema = z.object({
       })
     )
     .min(2),
+  /** Set only by the AI receipt-capture flow (ReceiptCaptureForm) — the source_documents row this draft is created from. */
+  sourceDocumentId: z.string().uuid().optional(),
 });
 
 /** Encoder's "add entry" flow — saves a draft, never posts. firm_admin/bookkeeper may also save a draft to finish later (same as they always could via /drafts, just via a real write path now — see createDraftGeneralJournal's doc comment). Reviewer/viewer excluded: neither may add entries at all. */
@@ -45,6 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       description: parsed.data.description,
       referenceNo: parsed.data.referenceNo,
       lines,
+      sourceDocumentId: parsed.data.sourceDocumentId,
     });
     return NextResponse.json({ entryId });
   } catch (err) {

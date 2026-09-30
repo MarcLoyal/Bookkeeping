@@ -17,6 +17,7 @@ export function GeneralJournalForm({
   mode = "post",
   entryId,
   initialValues,
+  sourceDocumentId,
 }: {
   clientId: string;
   accounts: Account[];
@@ -24,8 +25,10 @@ export function GeneralJournalForm({
   mode?: "post" | "draft" | "edit";
   /** Required for mode "edit" — the draft being edited. */
   entryId?: string;
-  /** Required for mode "edit" — prefills the form with the draft's current values. */
+  /** Required for mode "edit" — prefills the form with the draft's current values. Also used by the AI receipt-capture flow (ReceiptCaptureForm) to prefill from an extraction, mode "draft" in that case. */
   initialValues?: { entryDate: string; description: string; referenceNo: string; lines: Row[] };
+  /** Set only by ReceiptCaptureForm — attaches this draft to the source_documents row its image was uploaded to. Ignored outside mode "draft". */
+  sourceDocumentId?: string;
 }) {
   const editUrl = entryId ? `/api/clients/${clientId}/transactions/${entryId}/edit` : "";
   const { submit, error, pending } = useJsonPost<Record<string, unknown>>(
@@ -48,7 +51,14 @@ export function GeneralJournalForm({
     }
     return { totalDebit: d, totalCredit: c };
   }, [rows]);
-  const balanced = totalDebit === totalCredit && totalDebit > 0;
+  // Every row carrying an amount must also have an account picked, not
+  // just "debits equal credits" — the AI receipt-capture flow can
+  // prefill both an amount-filled debit row and credit row with no
+  // account chosen yet (it can read a total off a photo, never which
+  // accounts it belongs to), which the totals-only check below would
+  // have waved through as "balanced" despite being unsubmittable.
+  const rowsWithAmounts = rows.filter((r) => Number(r.debit) > 0 || Number(r.credit) > 0);
+  const balanced = totalDebit === totalCredit && totalDebit > 0 && rowsWithAmounts.every((r) => r.accountCode);
 
   function updateRow(i: number, field: keyof Row, value: string) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
@@ -112,7 +122,7 @@ export function GeneralJournalForm({
       }
     }
 
-    submit({ entryDate, description: fields.description, referenceNo, lines });
+    submit({ entryDate, description: fields.description, referenceNo, lines, ...(sourceDocumentId ? { sourceDocumentId } : {}) });
   }
 
   return (

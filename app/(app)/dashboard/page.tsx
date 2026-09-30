@@ -15,6 +15,7 @@ import {
 import { ActivityBadge } from "@/components/activity-badge";
 import { QuickPostPicker } from "./quick-post-picker";
 import { EncoderClientPicker } from "./encoder-client-picker";
+import { EncoderReceiptPicker } from "./encoder-receipt-picker";
 import { EncoderTransactionsPicker } from "./encoder-transactions-picker";
 import { PlatformFirmsTable } from "./platform-firms-table";
 import { PlatformGrowthChart } from "./platform-growth-chart";
@@ -140,6 +141,7 @@ export default async function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold tracking-tight">My Drafts</h1>
           <div className="flex flex-wrap items-center gap-2">
+            <EncoderReceiptPicker clients={clientOptions} />
             <EncoderTransactionsPicker clients={clientOptions} />
             <EncoderClientPicker clients={clientOptions} />
           </div>
