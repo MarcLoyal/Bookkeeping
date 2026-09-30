@@ -4331,3 +4331,9 @@ along with the sidebar block that used them — the header links are
 text-only, no icons, matching `SignOutButton`'s own plain-text style
 rather than the sidebar nav's icon+label pattern. Re-verified after the
 move: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build` both clean.
+
+**Relabeled again, same link/target/styling**: "Pricing" → "Upgrade" on
+the header's `/pricing` link, per follow-up feedback — no other change
+(still `href="/pricing"`, still Owner-only, still the same `text-xs`
+muted styling). "FAQ" is unchanged. Re-verified: `pnpm test` 308/308,
+`tsc --noEmit` and `pnpm build` both clean.

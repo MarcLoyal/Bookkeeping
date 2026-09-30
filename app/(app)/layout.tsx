@@ -128,7 +128,7 @@ function SidebarShell({
               {/* Owner only — matches every other billing-adjacent affordance in this layout (PlanStatusBanner, the eventual self-serve upgrade flow). Bookkeeper/Reviewer/Encoder/Viewer don't manage the firm's plan, and platform_admin has no firm of their own to upgrade. */}
               {user.role === "firm_admin" && (
                 <Link href="/pricing" prefetch={false} className="text-xs font-medium text-slate-500 hover:text-slate-900 hover:underline">
-                  Pricing
+                  Upgrade
                 </Link>
               )}
               <Link href="/faq" prefetch={false} className="text-xs font-medium text-slate-500 hover:text-slate-900 hover:underline">
