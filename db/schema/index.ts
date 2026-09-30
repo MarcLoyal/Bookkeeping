@@ -10,3 +10,4 @@ export * from "./transactions";
 export * from "./period_locks";
 export * from "./password_reset_tokens";
 export * from "./payroll";
+export * from "./source_documents";
