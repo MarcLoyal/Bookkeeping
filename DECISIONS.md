@@ -4315,3 +4315,19 @@ relied on historically — not by an isolated component render like the
 Pricing/FAQ pages themselves got, since faking a real authenticated
 request here would need a live Postgres-backed session, not just a
 plain React render.
+
+**Placement moved, same PR**: relocated from the sidebar footer block
+(above) to the header row, next to "Welcome, {name} · {role}" and
+`SignOutButton` — the sidebar footer block was removed entirely rather
+than left as dead code. Relabeled "Upgrade Plan" → "Pricing" for the
+tighter header context (matches the literal link name, still points to
+`/pricing`, still Owner-only for the same reasoning above) and "Help /
+FAQ" → "FAQ". Styled as plain small text links (`text-xs`, muted
+`text-slate-500`, no border/background) specifically so `SignOutButton`
+— which keeps its existing bordered-button treatment — still reads as
+the row's one primary action; the two new links are secondary by
+design, not by accident. `Sparkles`/`HelpCircle` icon imports removed
+along with the sidebar block that used them — the header links are
+text-only, no icons, matching `SignOutButton`'s own plain-text style
+rather than the sidebar nav's icon+label pattern. Re-verified after the
+move: `pnpm test` 308/308, `tsc --noEmit` and `pnpm build` both clean.
