@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { withUserContext } from "@/db/client";
 import { users } from "@/db/schema";
+import { flagTrialExpiredIfNeeded } from "@/lib/billing/flag-expired-trials";
 import { createSupabaseServerClient } from "./supabase-server";
 
 export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user" | "platform_admin" | "encoder" | "viewer";
@@ -42,7 +43,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   } = await supabase.auth.getUser();
   if (!authUser) return null;
 
-  return withUserContext(authUser.id, async (tx) => {
+  const current = await withUserContext(authUser.id, async (tx) => {
     const [row] = await tx.select().from(users).where(eq(users.id, authUser.id)).limit(1);
     if (!row || !row.active) return null;
     return {
@@ -54,6 +55,24 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       role: row.role as Role,
     };
   });
+
+  // Best-effort (a failure here never fails the actual request this
+  // function exists to serve) but AWAITED, not fire-and-forget — Vercel's
+  // serverless functions can terminate execution the moment a response is
+  // sent, so an un-awaited promise here has no guarantee of ever actually
+  // completing. See flagTrialExpiredIfNeeded()'s own doc comment for why
+  // this is the right place for the check itself (same lazy,
+  // checked-on-request pattern every other time-based feature in this
+  // app already uses).
+  if (current?.firmId) {
+    try {
+      await flagTrialExpiredIfNeeded(current.firmId);
+    } catch (err) {
+      console.error(`flagTrialExpiredIfNeeded(${current.firmId}) failed:`, err);
+    }
+  }
+
+  return current;
 }
 
 export async function requireCurrentUser(): Promise<CurrentUser> {

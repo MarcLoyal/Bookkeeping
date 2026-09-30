@@ -3646,3 +3646,100 @@ custom (non-tier) numbers are what's actually enforced.
 **Verified**: `pnpm test` 259/259 (242 existing + 17 new), run twice
 to confirm no leaked fixture state. `tsc --noEmit` and `pnpm build`
 both clean.
+
+## Trial & Plan Limits, backend: day-8 flag, downgrade action, platform admin controls
+
+Second layer on top of the plan-limits foundation. Backend-only —
+deliberately no UI or Server Actions in this pass, so it can be tested
+and reviewed in isolation before wiring up platform admin's dashboard
+queue/buttons and the Owner-facing swap page (next PR).
+
+**`lib/billing/flag-expired-trials.ts`** — `flagTrialExpiredIfNeeded(firmId)`,
+called from `getCurrentUser()` on every authenticated request (the same
+lazy, checked-on-request pattern the BIR deadlines widget and activity
+health already use — no cron infrastructure exists in this app at all).
+AWAITED, not fire-and-forget: Vercel's serverless functions can
+terminate execution the moment a response is sent, so an un-awaited
+promise here has no guarantee of ever completing — wrapped in try/catch
+so a failure here never fails the actual request. Runs on `authDb`:
+`firms` has no UPDATE policy for any firm-scoped role at all (only the
+two `firms_select` policies exist), so this could never succeed through
+the normal per-request connection.
+
+**`db/sql/019_client_read_only_enforcement.sql`** — the second half of
+"the rest become read-only with export still available." A new
+`enforce_client_writable()` trigger, attached to all five transaction-
+creating tables (`journal_entries`, `sales_invoices`, `purchases`,
+`cash_receipts`, `cash_disbursements`), blocks INSERT/UPDATE for any
+client whose status is `'inactive'`. Scoped to those five tables only —
+structural edits (accounts, contacts, client_tax_types) aren't blocked,
+since "new transaction entry" is what was asked for, not a total freeze.
+Known, flagged-not-decided simplification: this also blocks recording a
+reversal against an already-posted entry from a now-inactive client —
+correcting historical books for a client you can't add new work for is
+genuinely debatable, not resolved here either way.
+
+**`lib/billing/downgrade-firm-to-free.ts`** — `downgradeFirmToFree(platformAdminId, firmId)`,
+the actual manual action a platform admin triggers (next PR wires the
+button). In one `authDb` transaction: picks the 3 most-recently-viewed
+clients (across any user, via `user_client_views`, never-viewed sorting
+last) to stay active/onboarding, sets the rest to `'inactive'`; moves
+the firm to Free's plan/limits and clears the trial fields; deactivates
+every non-Owner, non-client_user staff member; writes one explicit
+`PLAN_DOWNGRADE` `audit_log` row (firms has no audit trigger of its own
+— same reasoning `createFirmForUser`'s `SIGNUP` row already established).
+Runs on `authDb`: `platform_admin` has no INSERT/UPDATE policy on
+`clients` or `users` at all (both scoped to `app_current_firm_id()`,
+always `NULL` for a platform_admin session) — a legitimate cross-tenant
+operation, not a shortcut. Order within the transaction doesn't actually
+matter for `018`'s triggers (every step here only ever *reduces* the
+counted set), kept in the order the feature was described anyway.
+
+**`lib/billing/swap-active-client.ts`** — `swapActiveClient(currentUser, input)`,
+the Owner-facing side of "auto-pick, Owner can swap after" (confirmed
+with you before building either half). Activating an `'inactive'`
+client demotes whichever currently-active client has gone longest
+without a view (never-viewed sorts first) — demote-then-activate in one
+`withUserContext` transaction, so the firm never exceeds its plan's
+client count even mid-transaction. Runs through the normal RLS-enforcing
+connection, unlike every other file in `lib/billing/`: Owner already has
+`UPDATE` on their own firm's clients via the existing `clients_update`
+policy, so no bypass is needed or appropriate for an ordinary Owner
+action.
+
+**`lib/billing/set-firm-plan.ts`** / **`lib/billing/extend-firm-trial.ts`** —
+platform admin's two manual controls, since billing isn't automated yet.
+`setFirmPlan` deliberately does **not** force-shrink anything if the new
+limits are below current usage — that's the specific, consequence-aware
+job `downgradeFirmToFree` does; an ordinary plan change (mostly
+upgrades, or correcting a mis-set plan) shouldn't silently deactivate a
+paying customer's staff as a side effect. Enterprise requires explicit
+`maxClients`/`maxUsers`/`perClientAssignmentAllowed` (Zod-validated) —
+no fixed tier exists for it. Moving a firm onto `'trial'` (including
+"give them another trial" after they'd moved off it) always starts a
+fresh `TRIAL_DURATION_DAYS`-day clock from now, never carries over
+whatever `trialEndsAt` happened to already be on the row.
+`extendFirmTrial` refuses a non-trial firm outright (change its plan
+instead), and extends from `max(trialEndsAt, now)`, not unconditionally
+from `now()` — so extending an already-generous or not-yet-expired
+trial is additive, never a reset backward.
+
+Three new `audit_log` action labels (`lib/audit-log-labels.ts`):
+`PLAN_DOWNGRADE`, `PLAN_CHANGE`, `TRIAL_EXTENDED`.
+
+**New tests**: `db/__tests__/plan-limits-downgrade.test.ts` — the flag
+function (fires only for an expired trial-plan firm, idempotent, never
+fires early or for a non-trial firm); the read-only trigger (blocks a
+new entry against an inactive client, allows one against active,
+confirmed attached to all five tables via `pg_trigger`/`pg_proc`, not
+just journal_entries); the full downgrade scenario (correct 3 clients
+kept by recency, correct 2 made read-only, non-Owner staff deactivated,
+Owner untouched, firm moved to Free's exact limits, attributable audit
+row); the swap function (non-Owner refused, correct least-recently-
+viewed client demoted, already-active client refused); `setFirmPlan`
+(fixed tier via defaults, enterprise validation, fresh trial clock on
+re-trial); `extendFirmTrial` (additive from the later of now/existing
+end date, refuses non-trial firms). `pnpm test` 283/283 (259 existing +
+21 new + 3 audit-label), run twice to confirm no leaked fixture state.
+`tsc --noEmit` and `pnpm build` both clean — no new routes in this
+backend-only pass.
