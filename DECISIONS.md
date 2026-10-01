@@ -4425,3 +4425,57 @@ scripts, the temporary `.env.local` edit) was removed/restored before
 committing — `git status` confirms a clean diff containing only the
 `prefetch={false}` changes and this note. Still a draft PR, not
 merged.
+
+### Hotfix: Recent Activity / Audit Log taken offline (confirmed-live cross-firm leak)
+
+The cross-firm leak investigated on `claude/audit-log-leak-investigation`
+(PR #47) — not reproducible against this repo's RLS policies in
+testing, but confirmed still live in production by you directly — is
+an active confidentiality issue, so this is a narrow, separate stopgap
+PR, not bundled with the investigation work or the pricing/FAQ branch.
+
+**Two surfaces taken down, not one**: the dashboard's "Recent Activity"
+panel (what was reported) AND `/settings/audit-log`
+(`app/(app)/settings/audit-log/page.tsx`) — both call the exact same
+`listRecentAuditLog()`, and the settings page is reachable directly
+from the sidebar nav (`History` icon, firm_admin only) independent of
+the dashboard panel, with no row limit (up to 200 rows, more exposed
+than the dashboard's 8-row preview). Taking down only the panel the
+report named would have left the fuller, equally-leaking page one
+click away — the dashboard panel even linked straight to it via "View
+all →". Both had to come down together for this to actually stop the
+exposure, which is the one thing this PR's whole job is to do.
+
+**The data is no longer fetched, not just hidden from the rendered
+output**: `listRecentAuditLog(user.id, 8)` was removed from the
+dashboard's `Promise.all` entirely, not left in place with the JSX
+below it swapped for a placeholder. This matters specifically because
+`DashboardPage` is a Server Component — whatever it fetches gets
+serialized into the RSC payload sent to the browser regardless of what
+the JSX actually renders, so a CSS/conditional-render-only hide would
+leave the leaked rows sitting in the page's own network response,
+inspectable via browser dev tools, even with nothing visible on
+screen. Same reasoning on the audit-log settings page: the query
+itself is gone, not wrapped in a condition.
+
+**Both pages now show a plain "Temporarily unavailable... no action
+needed on your part" message** instead — chosen over fully removing
+the panel/nav link so a Firm Admin who notices sees a deliberate,
+in-progress state rather than what could read as a broken dashboard.
+No security details surfaced in the user-facing copy. `requireFirmAdmin()`
+is kept on the audit-log page — only the data is held back, not the
+auth gate.
+
+**Scope deliberately narrow**: no RLS/migration changes here — that's
+PR #47's territory, and per your instructions this PR exists
+specifically to stop the live exposure *while* that's diagnosed
+separately. Re-enabling either surface should wait until PR #47's
+`pnpm diagnose-audit-log-rls` output (or whatever the actual root
+cause turns out to be) is confirmed fixed in production, not just
+merged here.
+
+**Verified**: `pnpm test` 308/308 (unchanged — pure UI/data-fetch
+removal, no new logic to test), `tsc --noEmit` and `pnpm build` both
+clean. Grepped for every remaining caller of `listRecentAuditLog()`
+across `app/` and `lib/` — confirmed these were the only two, both now
+disabled.
