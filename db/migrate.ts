@@ -116,6 +116,23 @@ async function main() {
     await migrationClient`insert into _sql_migrations_applied (filename) values (${file})`;
   }
 
+  // Unconditional, idempotent, run on every invocation — NOT gated by
+  // _sql_migrations_applied. 001_functions_triggers_rls.sql's own
+  // "GRANT ... ON ALL TABLES" + "ALTER DEFAULT PRIVILEGES" only covered
+  // tables that existed when 001 first ran, plus whatever the default-
+  // privileges rule happened to catch afterward — and that rule only
+  // applies to the one Postgres role that ran it, which a real Supabase
+  // project can't guarantee stays the same across the dashboard SQL
+  // editor / pooled connection / migration script. 016 and 022 each
+  // hit this live as a missing-GRANT bug on one new table and patched it
+  // with a one-off explicit GRANT; re-running the blanket grant here on
+  // every migrate closes the whole class at once, for every table that
+  // exists right now and every table a future migration adds, without
+  // anyone having to remember a per-table GRANT file again. GRANT is
+  // fully idempotent — safe to repeat even when nothing changed.
+  console.log(`Re-granting ${APP_ROLE} on all current tables (idempotent)...`);
+  await migrationClient.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
+
   console.log("Done.");
   await migrationClient.end();
 }

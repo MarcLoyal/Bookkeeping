@@ -4479,3 +4479,108 @@ removal, no new logic to test), `tsc --noEmit` and `pnpm build` both
 clean. Grepped for every remaining caller of `listRecentAuditLog()`
 across `app/` and `lib/` — confirmed these were the only two, both now
 disabled.
+
+### Root cause found: `DATABASE_URL` connecting as `postgres`, not `keepbooks_app` — bypasses RLS entirely
+
+Closes PR #47's open question. You ran
+`/settings/platform-admins/db-check` (the diagnostic page built during
+"Investigated: platform_admin rows and all-clients visible on
+/settings/team" above, merged but never actually confirmed live until
+now) against the real deployment and got back `current_user: postgres`,
+`Bypasses RLS (rolbypassrls): true`. That's the whole bug: `postgres`
+owns every table on this Supabase project, and a table owner bypasses
+plain `ENABLE ROW LEVEL SECURITY` by default (this app deliberately
+doesn't set `FORCE ROW LEVEL SECURITY`, since `db/authClient.ts`,
+`db/seed.ts`, and every admin script legitimately depend on the owner
+connection bypassing RLS). Every `withUserContext()` call was still
+running its `set_config('app.current_user_id', ...)` correctly — RLS
+was just never being evaluated for this connection at all, so every
+query, through every data-layer function, returned every firm's rows.
+This is the same root cause the `/settings/team` investigation already
+named as "most likely" without a way to confirm it live; the audit-log
+leak is a second symptom of the identical misconfiguration, not a
+separate bug.
+
+**Attempted fix, caused a full outage**: switching `DATABASE_URL` to
+the real `keepbooks_app` connection string (via
+`pnpm reset-app-role-password`, Transaction pooler,
+`keepbooks_app.<project-ref>` username — all correct) took the entire
+site down, not just the audit log. Reverted back to `postgres` +
+Transaction pooler to restore service.
+
+**Why switching roles broke everything**: `keepbooks_app` is a real,
+privilege-limited role — the moment the app actually ran as it instead
+of the owner, every table missing an explicit `GRANT` to
+`keepbooks_app` started rejecting all access outright (a missing
+`GRANT` raises its own error before RLS is even evaluated), not just
+returning fewer rows. This exact failure mode already happened twice
+before, caught live and patched reactively: `user_client_views` (016)
+and, learning from that, `source_documents` was granted proactively
+before it ever shipped (022). Both of those fixes' own comments already
+named the mechanism: `001_functions_triggers_rls.sql`'s
+`GRANT ... ON ALL TABLES` + `ALTER DEFAULT PRIVILEGES` only ever
+covered tables that existed when 001 first ran, plus whatever the
+default-privileges rule happened to still apply to afterward — and
+`ALTER DEFAULT PRIVILEGES` only applies to the one Postgres role that
+ran it, which isn't guaranteed to stay the same role across a real
+Supabase project's dashboard SQL editor / pooled connection / migration
+script. Every table this app has added since 001 — `payroll_runs`,
+`payslips`, `employees`, `journal_entries`, `journal_lines`,
+`clients`, `client_tax_types`, `contacts`, `accounts`,
+`sales_invoices`, `purchases`, `cash_receipts`/`cash_receipt_lines`,
+`cash_disbursements`/`cash_disbursement_lines`, `period_locks`,
+`password_reset_tokens`, `tax_rules`, `sss_contribution_brackets`,
+`withholding_tax_brackets`, `user_client_assignments`,
+`client_counters` — was never confirmed to actually have this grant on
+the real project; only `user_client_views` and `source_documents` were
+ever checked and fixed. That's almost certainly most of why the app
+fell over entirely under `keepbooks_app`, not just the audit log.
+
+**Fix**: `db/migrate.ts` now re-runs
+`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO keepbooks_app`
+unconditionally on every invocation, after the tracked one-time SQL
+files — not gated by `_sql_migrations_applied` the way `db/sql/*.sql`
+files are, since the whole point is to stop depending on a rule that's
+already proven unreliable on this project. `GRANT` is fully
+idempotent (re-running it when nothing changed is a no-op), and
+`ON ALL TABLES IN SCHEMA public` grants on every table that exists at
+the moment it runs regardless of which role created it or when — so
+this closes the gap for every table that exists right now in one
+shot, and will self-heal for any future table the moment someone runs
+`db:migrate` again, without anyone needing to remember a per-table
+`GRANT` file (closing the class of bug 016 and 022 each patched one
+table at a time). No schema or RLS policy changed — table-level grants
+are additive and orthogonal to RLS, which still fully applies once the
+connection is actually the restricted role.
+
+**Not verified end-to-end in this sandbox**: `db:migrate` and
+`pnpm test` were both blocked from running here by this environment's
+own permission controls during this session (no local Postgres access
+available), so I could not execute this against a real database or run
+the existing test suite. `tsc --noEmit` passes clean. The added
+statement is the identical `GRANT` text already proven to run
+successfully in `001_functions_triggers_rls.sql` in this exact
+codebase — only moved to run unconditionally — so the syntax risk is
+effectively zero, but this still needs to be run for real before
+trusting it.
+
+**What you need to do, in order**:
+1. Review this diff.
+2. Run `pnpm db:migrate` yourself against `MIGRATION_DATABASE_URL`
+   (same as every other migration this session) — this applies the new
+   blanket `GRANT` to the real project immediately and prints its own
+   output per table action.
+3. Only after that completes cleanly, switch `DATABASE_URL` back to
+   the `keepbooks_app` connection string and redeploy.
+4. Re-check `/settings/platform-admins/db-check` — expect
+   `current_user: keepbooks_app`, `Bypasses RLS: false`, green.
+5. Confirm the app loads normally end-to-end (not just the DB-check
+   page) before considering this closed, since a missing grant on one
+   specific table could still surface as a crash only on the page that
+   touches it.
+
+Once `keepbooks_app` is confirmed healthy in production with the app
+otherwise working normally, that's the "resolved and verified"
+condition for re-enabling Recent Activity and `/settings/audit-log`
+(reverting the hotfix above) — not done yet, waiting on that
+confirmation.
