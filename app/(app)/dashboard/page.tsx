@@ -4,7 +4,6 @@ import { AlertTriangle, Building2, CalendarClock, CalendarPlus, FileEdit, UserPl
 import { requireCurrentUser } from "@/lib/auth/current-user";
 import { getClientAttentionStat, getClientLastActivity, getFirmDashboardStats, listFirmDrafts } from "@/lib/data/dashboard";
 import { listClients } from "@/lib/data/clients";
-import { listRecentAuditLog } from "@/lib/data/audit-log";
 import { listUpcomingDeadlines } from "@/lib/data/deadlines";
 import {
   getCumulativeFirmsByWeek,
@@ -166,9 +165,16 @@ export default async function DashboardPage() {
     );
   }
 
-  const [{ clients, draftCount }, recentActivity, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
+  // SECURITY HOTFIX, do not re-add without the cross-firm audit_log leak
+  // confirmed fixed and verified (see DECISIONS.md): listRecentAuditLog()
+  // was reported leaking another firm's sign-ins/failed sign-ins/account
+  // creation events. Removed from this Promise.all entirely, not just
+  // hidden from the JSX below — a Server Component serializes every prop
+  // it's given into the RSC payload sent to the browser regardless of
+  // what actually renders, so hiding the panel alone would NOT have
+  // stopped the leak; the data must never be fetched in the first place.
+  const [{ clients, draftCount }, clientLastActivity, drafts, upcomingDeadlines] = await Promise.all([
     getFirmDashboardStats(user.id),
-    user.role === "firm_admin" ? listRecentAuditLog(user.id, 8) : Promise.resolve([]),
     getClientLastActivity(user.id),
     listFirmDrafts(user.id),
     listUpcomingDeadlines(user.id),
@@ -305,24 +311,11 @@ export default async function DashboardPage() {
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900">Recent Activity</h2>
-                <Link href="/settings/audit-log" className="text-sm text-slate-600 hover:underline">
-                  View all →
-                </Link>
               </div>
               <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <ul className="divide-y divide-slate-100">
-                  {recentActivity.map((a) => (
-                    <li key={a.id} className="px-4 py-3 text-sm">
-                      <div className={a.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : "text-slate-900"}>{a.description}</div>
-                      <div className="mt-0.5 text-xs text-slate-600">
-                        {a.actorName} · {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}
-                      </div>
-                    </li>
-                  ))}
-                  {recentActivity.length === 0 && (
-                    <li className="px-4 py-8 text-center text-sm text-slate-500">No activity logged yet.</li>
-                  )}
-                </ul>
+                <p className="px-4 py-8 text-center text-sm text-slate-500">
+                  Temporarily unavailable while we investigate an issue with this panel. No action needed on your part.
+                </p>
               </div>
             </div>
           )}
