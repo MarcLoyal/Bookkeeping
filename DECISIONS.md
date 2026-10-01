@@ -4425,3 +4425,83 @@ scripts, the temporary `.env.local` edit) was removed/restored before
 committing — `git status` confirms a clean diff containing only the
 `prefetch={false}` changes and this note. Still a draft PR, not
 merged.
+
+### Investigated: reported cross-firm leak in "Recent Activity" (audit log) — not reproduced in this codebase
+
+Reported: a firm's dashboard "Recent Activity" panel showing another
+firm's sign-ins, failed sign-ins, and account-creation events. Treated
+as a live confidentiality incident and investigated accordingly —
+traced the exact query, then tested it empirically against real
+multi-firm data rather than only reading SQL and declaring it safe.
+
+**The query itself** (`lib/data/audit-log.ts#listRecentAuditLog`, which
+`app/(app)/dashboard/page.tsx` calls for the Owner-only Recent Activity
+panel) has no app-level `WHERE firm_id = ...` at all — by design,
+matching this codebase's established convention everywhere else
+(`listClients`, `listTeamMembers`, every report query): RLS does the
+scoping, the app layer trusts it rather than duplicating it. So the
+real question was whether `audit_log_select`
+(`db/sql/001_functions_triggers_rls.sql`) and the `users_select` it
+joins through actually scope correctly, not whether the TypeScript
+code "forgot a WHERE clause."
+
+**Three rounds of empirical testing, not just reading the SQL**, using
+two real firms already in this sandbox's local Postgres
+(`Keep.Books Demo Firm`, 1225 real audit_log rows; `RLS Test Firm`,
+1548 real audit_log rows) — a real same-database, cross-firm scenario,
+not a synthetic one:
+1. Raw `psql` as the `keepbooks_app` role, `set_config('app.current_user_id', ..., true)` exactly like `withUserContext()`, querying `audit_log` with zero `LIMIT`/`WHERE`: each firm's admin saw only their own firm's rows (1225 and 1548 respectively), confirmed symmetrically from both sides.
+2. The *real* `listRecentAuditLog()` function, called for both firms' admins **concurrently, 5 rounds, on the same Node process / connection pool** — deliberately simulating a warm serverless instance interleaving different firms' requests on a reused Postgres connection, since that's the one scenario a single clean `psql` session can't test. Zero cross-contamination in 10 calls.
+3. The same pattern extended to `clients`, `users` (team), and a report-shaped `journal_entries ⋈ clients` join — all firm-scoped data categories the request asked to audit — all clean, zero foreign-firm rows.
+
+**Conclusion: as currently written and committed in this repo, `audit_log_select`/`users_select`/`clients_select` do not leak across firms.** This doesn't mean the report is wrong — it means the cause, if the leak is real, is something this sandbox can't observe, not a bug in the code as it exists here. Two concrete, unequal-weight hypotheses:
+
+1. **Most likely: production is missing a migration this repo has.**
+   This sandbox's local Postgres has all 25 `db/sql/*.sql` migrations
+   applied (confirmed via `_sql_migrations_applied`); I have no way to
+   check whether production's Supabase project does too. If an older
+   version of `audit_log_select` — or no RLS on `audit_log` at all —
+   predates the policy currently in `001_functions_triggers_rls.sql`,
+   this exact symptom follows directly. **Added
+   `scripts/diagnose-audit-log-rls.ts`** (`pnpm diagnose-audit-log-rls`,
+   read-only) specifically to let you check this against the real
+   production database: it prints every applied migration plus the
+   live `pg_policy` text for `audit_log`/`users`/`clients`, with the
+   expected text printed alongside for a direct by-eye diff. This is
+   the first thing to run.
+2. **Less likely but worth ruling out: a caching bug, not a data leak**
+   — a user seeing *another specific user's* dashboard (not garbled or
+   empty data) also matches the signature of a response-caching issue
+   (a CDN/edge layer serving a previously-rendered page to the wrong
+   session) rather than a SQL/RLS hole. Worth noting given the timing:
+   this report came in immediately after the connection-pool-exhaustion
+   incident (`EMAXCONNSESSION`, see above) — if that was still active
+   when this was observed, it's also worth checking whether any 500s/
+   retries around that time coincided with what was seen.
+
+**Regression test added**: `db/__tests__/audit-log-cross-firm-isolation.test.ts`
+— new, since no existing test actually exercised `audit_log`'s SELECT-
+side cross-firm scoping before (the three files that reference
+`audit_log` all check that a row got *written*, via the schema-owner
+`ownerDb`, never that an ordinary firm_admin's RLS-scoped *read* stays
+within their own firm — a real, now-closed coverage gap). Two fresh
+firms, each with real `LOGIN`/`LOGIN_FAILED`/`SIGNUP`-shaped audit_log
+rows (not just generic trigger-fired mutations, which the existing
+RLS test files already cover) — asserts via `listRecentAuditLog()`
+itself that neither firm's Owner ever sees the other's rows, checked
+by specific row id, not just by firm_id. Also covers `users`/`clients`
+cross-firm lookup-by-id denial in the same file, addressing the
+"accounts... anywhere" part of the request in one place. 5 new tests,
+all passing against this repo's current RLS.
+
+**Verified**: `pnpm test` 313/313 (308 + 5 new, run clean), `tsc
+--noEmit` and `pnpm build` both clean.
+
+**What's still open, honestly**: this sandbox cannot confirm or deny
+the leak against your actual production database — only that the code
+and policies as committed here don't reproduce it under real,
+concurrent, multi-firm load. Please run
+`pnpm diagnose-audit-log-rls` against production and share the output
+(or just the parts that differ from the "Expected" block it prints) —
+that will tell us definitively whether this is a migration-drift issue
+this repo can fix with `pnpm db:migrate`, or something else entirely.
