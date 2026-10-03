@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Check } from "lucide-react";
 import {
   ANNUAL_BONUS_OFFER,
+  BILLING_CADENCE_NOTE,
   CLIENT_DEFINITION_NOTE,
   PLAN_POSITIONING_NOTE,
   PRICING_TIERS,
@@ -34,11 +35,15 @@ function TierCard({ tier }: { tier: PricingTier }) {
       <p className="mt-1 text-sm text-slate-500">{tier.tagline}</p>
 
       <div className="mt-5">
-        {tier.monthlyPricePhp !== null ? (
-          <p>
-            <span className="text-3xl font-bold tracking-tight text-slate-900">{formatPhp(tier.monthlyPricePhp)}</span>
-            <span className="text-sm text-slate-500"> / month</span>
-          </p>
+        {tier.annualPricePhp !== null ? (
+          <>
+            <p>
+              <span className="text-3xl font-bold tracking-tight text-slate-900">{formatPhp(tier.annualPricePhp)}</span>
+              <span className="text-sm text-slate-500"> / year</span>
+            </p>
+            {tier.monthlyPricePhp !== null && <p className="mt-1 text-xs text-slate-400">≈ {formatPhp(tier.monthlyPricePhp)}/month</p>}
+            <p className="mt-1 text-xs text-slate-400">{BILLING_CADENCE_NOTE}</p>
+          </>
         ) : (
           <p className="text-3xl font-bold tracking-tight text-slate-900">Custom</p>
         )}

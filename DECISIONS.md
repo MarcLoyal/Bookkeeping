@@ -4546,3 +4546,38 @@ begin with). `pnpm lint` fails before reaching any file (circular-JSON
 crash inside `@eslint/eslintrc`'s config validator while loading
 `eslint-config-next` — pre-existing tooling issue, not something a
 content edit could cause).
+
+## Pricing page fix: annual price as headline, monthly as reference only
+
+Follow-up to the pricing content update above, same branch/PR (#50).
+The previous commits kept `monthlyPricePhp` as the card's big headline
+number ("₱2,499/month"), which misrepresented how Keep.Books actually
+bills: annually or semi-annually only, never monthly. Checked the rest
+of the codebase first, per instruction, for any existing billing-cycle
+or semi-annual-price source of truth to reconcile against — found
+none (no checkout, payment-processor, or billing-cycle code exists
+anywhere outside this marketing file), so there was nothing to flag a
+conflict against and nothing to invent a semi-annual number from.
+
+**`PricingTier` gained `annualPricePhp`** (the real headline — Basic
+₱29,988, Premium ₱95,988, both = monthlyPricePhp × 12, Custom still
+`null`). `monthlyPricePhp` stays on the type but is now documented as
+a reference-only "≈ ₱X/month" figure shown small and muted underneath
+the annual price, never the primary number — same PLACEHOLDER status
+it's had since PR #44, just no longer presented as a charge.
+
+**New `BILLING_CADENCE_NOTE`** ("Billed annually or semi-annually.")
+renders next to the price on Basic and Premium only — Custom is
+quoted individually and states no fixed cadence, unchanged.
+
+**Verified**: `tsc --noEmit` clean. `pnpm test` unchanged (146 passed
+/ 15 skipped / 12 pre-existing failures). Re-rendered `PricingPage`
+via `react-dom/server` and confirmed: ₱29,988/year and ₱95,988/year
+now appear as the headline (`.../ year` suffix), "≈ ₱2,499/month" and
+"≈ ₱7,999/month" appear as the muted secondary line, the old
+"₱2,499 / month" / "₱7,999 / month" headline format no longer appears
+anywhere, the billing cadence note appears exactly twice (Basic and
+Premium), Custom's card still renders the literal "Custom" price
+unchanged, and every line confirmed in the two prior commits (Custom
+rename, transaction allowances, add-on line, annual bonus copy, no
+"Enterprise" or "AI Receipt Capture" anywhere) is still present.
