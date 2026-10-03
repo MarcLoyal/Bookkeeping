@@ -1,6 +1,14 @@
 import Link from "next/link";
 import { Check } from "lucide-react";
-import { PRICING_TIERS, REFERRAL_PROGRAM, TRIAL_OFFER, type PricingTier } from "@/lib/marketing/pricing-config";
+import {
+  ANNUAL_BONUS_OFFER,
+  CLIENT_DEFINITION_NOTE,
+  PLAN_POSITIONING_NOTE,
+  PRICING_TIERS,
+  REFERRAL_PROGRAM,
+  TRIAL_OFFER,
+  type PricingTier,
+} from "@/lib/marketing/pricing-config";
 
 export const metadata = {
   title: "Pricing — Keep.Books",
@@ -40,6 +48,11 @@ function TierCard({ tier }: { tier: PricingTier }) {
         <p>
           <span className="font-semibold text-slate-900">{tier.clientsIncluded}</span>
         </p>
+        {tier.transactionsIncluded && (
+          <p>
+            <span className="font-semibold text-slate-900">{tier.transactionsIncluded}</span>
+          </p>
+        )}
         <p>
           <span className="font-semibold text-slate-900">{tier.subUserSeats}</span>
         </p>
@@ -47,6 +60,8 @@ function TierCard({ tier }: { tier: PricingTier }) {
           <span className="font-semibold text-slate-900">{tier.perClientAssignment ? "Yes" : "No"}</span> per-client staff assignment
         </p>
       </div>
+
+      {tier.addOnLine && <p className="mt-5 rounded-md bg-slate-50 p-3 text-sm text-slate-600">{tier.addOnLine}</p>}
 
       <ul className="mt-5 flex-1 space-y-2.5 text-sm text-slate-600">
         {tier.features.map((feature) => (
@@ -56,6 +71,13 @@ function TierCard({ tier }: { tier: PricingTier }) {
           </li>
         ))}
       </ul>
+
+      {tier.annualBonusEligible && (
+        <div className="mt-5 border-t border-slate-100 pt-5">
+          <p className="text-sm font-medium text-slate-900">{ANNUAL_BONUS_OFFER.headline}</p>
+          <p className="mt-1 text-xs text-slate-500">{ANNUAL_BONUS_OFFER.finePrint}</p>
+        </div>
+      )}
 
       <Link
         href="/signup"
@@ -88,11 +110,15 @@ export default function PricingPage() {
         <p className="text-sm text-slate-600">{TRIAL_OFFER.description}</p>
       </div>
 
-      <div className="mx-auto mt-12 grid max-w-5xl gap-6 md:grid-cols-3">
+      <p className="mx-auto mt-10 max-w-2xl text-center text-sm text-slate-500">{PLAN_POSITIONING_NOTE}</p>
+
+      <div className="mx-auto mt-6 grid max-w-5xl gap-6 md:grid-cols-3">
         {PRICING_TIERS.map((tier) => (
           <TierCard key={tier.id} tier={tier} />
         ))}
       </div>
+
+      <p className="mx-auto mt-6 max-w-2xl text-center text-xs text-slate-400">{CLIENT_DEFINITION_NOTE}</p>
 
       <div className="mx-auto mt-12 max-w-2xl rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
         <p className="text-lg font-semibold text-slate-900">Refer a firm, save {REFERRAL_PROGRAM.discountPercent}%</p>

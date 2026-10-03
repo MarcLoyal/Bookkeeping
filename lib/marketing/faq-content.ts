@@ -33,8 +33,8 @@ export const FAQ_ITEMS: FaqItem[] = [
     answer: `Nothing is deleted, and nothing breaks. Your trial gives you full access to every feature for ${TRIAL_DURATION_DAYS} days with up to ${TRIAL_OFFER.maxClients} clients. If it ends before you've chosen a paid plan, you'll see a notice in your dashboard and our team will help you pick the plan that fits. If a plan isn't chosen, your account moves to our Free tier — your most recently used clients stay fully active, older ones become read-only (viewable, but not editable) until you upgrade, and everything is preserved exactly as you left it.`,
   },
   {
-    question: "What's the difference between Basic, Premium, and Enterprise?",
-    answer: `The three plans scale with the size of your practice: how many clients you can manage and how many team members (seats) you can add. Premium also unlocks assigning specific bookkeepers to specific clients, useful once your team grows past a couple of people. Enterprise is built for large corporations and multi-branch firms that need limits sized specifically to them. See the Pricing page for the full breakdown.`,
+    question: "What's the difference between Basic, Premium, and Custom?",
+    answer: `The three plans scale with the size of your practice: how many clients you can manage and how many team members (seats) you can add. Premium also unlocks assigning specific bookkeepers to specific clients, useful once your team grows past a couple of people. Custom is built for large corporations and multi-branch firms that need limits sized specifically to them. See the Pricing page for the full breakdown.`,
   },
   {
     question: "Can I add team members (e.g. an encoder who only enters data vs. a viewer) to my account?",
