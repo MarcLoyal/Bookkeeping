@@ -4497,26 +4497,27 @@ real plan key already written to firm rows in the database, and
 renaming it would be a backend/data change, not a content one. Only
 the display string changed.
 
-**Two things this update advertises ahead of what the product
-actually does**, flagged here same as PR #44 flagged its placeholder
-price:
+**One thing this update advertises ahead of what the product actually
+does**, flagged here same as PR #44 flagged its placeholder price:
+**transaction allowances** ("3,000 / 15,000 transactions per month",
+the Basic add-on line, the annual-bonus client slots) — there is no
+transaction-metering, usage-tracking, add-on-purchase, or
+annual-billing system in the codebase. These are marketing copy only,
+same placeholder status as `monthlyPricePhp` has had since PR #44.
+Explicitly instructed not to build any of that logic here — it's
+separate, larger work to come later.
 
-1. **Transaction allowances** ("3,000 / 15,000 transactions per
-   month", the Basic add-on line, the annual-bonus client slots) —
-   there is no transaction-metering, usage-tracking, add-on-purchase,
-   or annual-billing system in the codebase. These are marketing
-   copy only, same placeholder status as `monthlyPricePhp` has had
-   since PR #44. Explicitly instructed not to build any of that
-   logic here — it's separate, larger work to come later.
-2. **"Includes AI Receipt Capture" on the Custom tier** — PR #44's
-   version of this file deliberately said nothing about AI receipt
-   capture because its UI (`claude/receipt-capture-ui`, the
-   fair-use-cap PR) was still unmerged, and advertising an unshipped
-   feature was judged worse than leaving it out. That PR is *still*
-   unmerged as of this update. Adding the mention now is a product
-   decision to advertise ahead of that feature's launch, not a sign
-   it shipped — worth the reviewer's attention since it reverses
-   PR #44's stated reasoning.
+**"Includes AI Receipt Capture" on the Custom tier — added, then
+reverted, per review feedback.** The first commit on this branch
+added that line, reasoning it was a deliberate product decision to
+advertise ahead of launch. On review, explicitly told to keep this
+consistent with PR #44's original call instead: that PR said nothing
+about AI receipt capture because its UI (`claude/receipt-capture-ui`,
+PR #43, the fair-use-cap PR) was still unmerged, and advertising an
+unshipped feature was judged worse than leaving it out. PR #43 is
+*still* unmerged, so the line is removed again — Custom's tagline is
+back to "Custom client capacity and users. Contact us for a quote."
+Add the AI Capture line back in once #43 merges, not before.
 
 **Client limit wording** ("10 active clients" / "30 active clients",
 replacing "Up to N clients") — these numbers aren't new placeholders:
@@ -4525,21 +4526,23 @@ they're pulled from the same `PLAN_DEFAULTS.basic.maxClients` /
 the real numbers `db/sql/018_plan_limits.sql`'s triggers enforce. Only
 the wording changed, not the source.
 
-**Verified**: no DB available in this sandbox (same pre-existing
-limitation PR #44 documented — `next build`/`next dev` can't start
-without `DATABASE_URL`), so used the same substitute PR #44 used:
-rendered `PricingPage` and `FaqPage` directly via
+**Verified** (both on the initial commit and again after the AI
+Capture line was reverted): no DB available in this sandbox (same
+pre-existing limitation PR #44 documented — `next build`/`next dev`
+can't start without `DATABASE_URL`), so used the same substitute PR
+#44 used: rendered `PricingPage` and `FaqPage` directly via
 `react-dom/server`'s `renderToStaticMarkup`. Both render without
 throwing; checked the output contains every new line verbatim (all
 three tier names including "Custom", zero remaining "Enterprise"
 occurrences on either page, both transaction-allowance lines, the
 add-on line, both annual-bonus lines, the client-definition footnote,
-and the plan-positioning note). `tsc --noEmit` clean. `pnpm test`:
-same 146 passed / 15 skipped / 12 failed as the unmodified baseline
-(the 12 failures are all pre-existing `DATABASE_URL`/
-`MIGRATION_DATABASE_URL` sandbox limitations, unrelated to this
-change — confirmed no pricing/FAQ-specific test exists to begin
-with). `pnpm lint` fails before reaching any file (circular-JSON
+the plan-positioning note) and, after the revert, that "AI Receipt
+Capture" appears on neither page. `tsc --noEmit` clean. `pnpm test`:
+same 146 passed / 15 skipped / 12 failed as the unmodified baseline,
+unchanged by the revert (the 12 failures are all pre-existing
+`DATABASE_URL`/`MIGRATION_DATABASE_URL` sandbox limitations, unrelated
+to this change — confirmed no pricing/FAQ-specific test exists to
+begin with). `pnpm lint` fails before reaching any file (circular-JSON
 crash inside `@eslint/eslintrc`'s config validator while loading
 `eslint-config-next` — pre-existing tooling issue, not something a
-two-file content edit could cause).
+content edit could cause).

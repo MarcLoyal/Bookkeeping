@@ -26,11 +26,11 @@ import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
  * DECISIONS.md's "Pricing content update: Custom plan rename, transaction
  * allowances, annual bonus" entry.
  *
- * Mentions AI receipt capture on the Custom tier now, which earlier
- * revisions of this file deliberately did not do: that feature's UI
- * (claude/receipt-capture-ui) is still unmerged as of this update, so this
- * is advertising ahead of launch by product decision, not because the
- * feature shipped — see the same DECISIONS.md entry for why.
+ * Still says nothing about AI receipt capture, same as PR #44's original
+ * reasoning: that feature's UI (claude/receipt-capture-ui, PR #43) is still
+ * unmerged, and advertising a feature that isn't live in production yet
+ * would be worse than leaving it out until it ships. Add it back in once
+ * #43 merges.
  */
 
 export type PricingTierId = "basic" | "premium" | "enterprise";
@@ -132,7 +132,7 @@ export const PRICING_TIERS: PricingTier[] = [
   {
     id: "enterprise",
     name: "Custom",
-    tagline: "Custom client capacity and users. Includes AI Receipt Capture. Contact us for a quote.",
+    tagline: "Custom client capacity and users. Contact us for a quote.",
     monthlyPricePhp: null,
     positioningTag: "Recommended for large corporations",
     clientsIncluded: "Custom — sized to your firm",
