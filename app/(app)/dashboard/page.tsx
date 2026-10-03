@@ -6,6 +6,7 @@ import { getClientAttentionStat, getClientLastActivity, getFirmDashboardStats, l
 import { listClients } from "@/lib/data/clients";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
 import { listUpcomingDeadlines } from "@/lib/data/deadlines";
+import { formatDateTimePH } from "@/lib/format-datetime";
 import {
   getCumulativeFirmsByWeek,
   getFirmSignupsByWeek,
@@ -321,7 +322,7 @@ export default async function DashboardPage() {
                     <li key={a.id} className="px-4 py-3 text-sm">
                       <div className={a.action === "LOGIN_FAILED" ? "font-medium text-amber-800" : "text-slate-900"}>{a.description}</div>
                       <div className="mt-0.5 text-xs text-slate-600">
-                        {a.actorName} · {a.createdAt.toISOString().replace("T", " ").slice(0, 16)}
+                        {a.actorName} · {formatDateTimePH(a.createdAt)}
                       </div>
                     </li>
                   ))}

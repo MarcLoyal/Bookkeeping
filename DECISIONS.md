@@ -4654,3 +4654,64 @@ making any changes here. Grepped for every remaining caller of
 history.
 
 Left as a new PR, unmerged, for your review, per instruction.
+
+## Timestamps displayed in Philippine time, not raw UTC
+
+Reported: the Recent Activity panel and `/settings/audit-log` showed
+timestamps in raw UTC (e.g. "2026-10-03 17:14" when it was already
+past midnight on Oct 4 in the Philippines). Storage stays UTC — this
+is display-only, per instruction.
+
+**Checked first, per instruction, for a shared date/time formatting
+utility to fix in one place — none existed.** Every file in the
+codebase formatted dates ad hoc with raw `.toISOString()` calls; no
+`lib/format-date.ts` or equivalent. Flagged this back rather than
+guessing at scope: found the identical full-date+time-in-UTC bug in
+two more places you hadn't mentioned (`platform-firms-table.tsx`'s
+expanded firm row — "Signed up" and "Last active"), plus three
+related-but-distinct date-*only* displays computed the same ad-hoc
+UTC way (platform admins' "added" date, tax rules' "last verified"
+date, a reversal-entry form's default date input) that could show the
+wrong calendar day near midnight PH but never a wrong clock time.
+Explicitly did not lump in BIR deadline due-dates or report
+date-range defaults — those construct deliberate UTC-midnight
+calendar dates or touch what counts as "today" for business logic
+(deadline windows), not a stored timestamp displayed without
+conversion; out of scope both by category and by your own "only
+change display" instruction.
+
+**You chose**: fix all 4 identical-bug spots (the 2 named pages + the
+2 Platform Admin dashboard spots), leave the date-only displays and
+the business-logic date boundaries alone for now.
+
+**`lib/format-datetime.ts`** (new): `formatDateTimePH(date, { seconds?
+})` — converts a `Date | string` to Philippine time (`Asia/Manila`)
+and formats it as `YYYY-MM-DD HH:MM` (or `HH:MM:SS` with `seconds:
+true`, matching `/settings/audit-log`'s existing extra precision,
+which the dashboard panel never had — preserved that difference
+rather than flattening it). Uses `Intl.DateTimeFormat` with `timeZone:
+"Asia/Manila"` rather than a hardcoded `+8` offset, so it stays
+correct against the runtime's own IANA tzdata; `hourCycle: "h23"`
+specifically (not `hour12: false`) to avoid a known Intl quirk where
+some locale/engine combinations render midnight as `24:00`.
+
+Applied to all 4 confirmed spots: `app/(app)/dashboard/page.tsx`
+(Recent Activity), `app/(app)/settings/audit-log/page.tsx` (with
+seconds, matching its prior precision), and both full-timestamp spots
+in `app/(app)/dashboard/platform-firms-table.tsx` — its separate,
+date-only `formatDate()` helper (used by the table's own "created"/
+"last active" columns, a different, out-of-scope display) is
+untouched.
+
+**Verified**: `lib/__tests__/format-datetime.test.ts` (new, 8 tests) —
+the exact reported scenario (`2026-10-03T17:14:00Z` → `2026-10-04
+01:14`), a non-rollover case, zero-padding, a year-boundary rollover,
+midnight rendering as `00:00` not `24:00`, and the `seconds` option
+both set and default. `tsc --noEmit` clean. `pnpm test`: 323/323
+passed (the 315-test baseline from the previous PR plus these 8, zero
+failures). `pnpm build` succeeded cleanly, `/dashboard` and
+`/settings/audit-log` both still compile as dynamic routes. Grepped
+for every remaining `.toISOString().replace("T", " ")` occurrence —
+none left outside this new file's own doc comment describing the old
+pattern. `pnpm lint` still fails with the same pre-existing
+`@eslint/eslintrc` circular-JSON crash documented on recent PRs.

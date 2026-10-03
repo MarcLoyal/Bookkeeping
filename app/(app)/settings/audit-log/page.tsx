@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { requireFirmAdmin } from "@/lib/auth/current-user";
 import { listRecentAuditLog } from "@/lib/data/audit-log";
+import { formatDateTimePH } from "@/lib/format-datetime";
 
 // Restored (see DECISIONS.md's "Restore Recent Activity / Audit Log"
 // entry) after the cross-firm audit_log leak's root cause (the app
@@ -40,7 +41,7 @@ export default async function AuditLogPage() {
           <tbody className="divide-y divide-slate-100">
             {rows.map((r) => (
               <tr key={r.id} className={r.action === "LOGIN_FAILED" ? "bg-amber-50" : undefined}>
-                <td className="px-4 py-2 text-xs text-slate-500">{r.createdAt.toISOString().replace("T", " ").slice(0, 19)}</td>
+                <td className="px-4 py-2 text-xs text-slate-500">{formatDateTimePH(r.createdAt, { seconds: true })}</td>
                 <td className="px-4 py-2">
                   {r.actorName}
                   <span className="ml-1 text-xs text-slate-400">{r.actorEmail}</span>

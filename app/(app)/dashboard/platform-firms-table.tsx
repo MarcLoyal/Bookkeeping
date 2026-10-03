@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useState } from "react";
 import type { FirmDashboardRow } from "@/lib/data/platform-dashboard";
 import { ActivityBadge } from "@/components/activity-badge";
+import { formatDateTimePH } from "@/lib/format-datetime";
 
 const SIGNUP_METHOD_LABELS: Record<string, string> = { email: "Email", google: "Google" };
 
@@ -87,11 +88,11 @@ export function PlatformFirmsTable({ rows }: { rows: FirmDashboardRow[] }) {
                         </div>
                         <div>
                           <span className="font-medium text-slate-500">Signed up</span>
-                          <div>{new Date(firm.createdAt).toISOString().replace("T", " ").slice(0, 16)}</div>
+                          <div>{formatDateTimePH(firm.createdAt)}</div>
                         </div>
                         <div>
                           <span className="font-medium text-slate-500">Last active</span>
-                          <div>{firm.lastActiveAt ? new Date(firm.lastActiveAt).toISOString().replace("T", " ").slice(0, 16) : "Never"}</div>
+                          <div>{firm.lastActiveAt ? formatDateTimePH(firm.lastActiveAt) : "Never"}</div>
                         </div>
                       </div>
                       <p className="mt-2 text-slate-400">Deeper per-firm activity history is coming in a later update.</p>
