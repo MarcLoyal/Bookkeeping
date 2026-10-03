@@ -4479,3 +4479,105 @@ removal, no new logic to test), `tsc --noEmit` and `pnpm build` both
 clean. Grepped for every remaining caller of `listRecentAuditLog()`
 across `app/` and `lib/` — confirmed these were the only two, both now
 disabled.
+
+## Pricing content update: Custom plan rename, transaction allowances, annual bonus
+
+Content-only follow-up to PR #44's Pricing/FAQ pages, per explicit
+instruction. `lib/marketing/pricing-config.ts` and
+`lib/marketing/faq-content.ts` (plus the Pricing page component to
+actually render the new fields) changed; no backend logic, schema, or
+enforcement.
+
+**Renamed "Enterprise" to "Custom"** everywhere it's customer-facing
+(`PricingTier.name`, the Pricing page, the FAQ's plan-diff Q&A). The
+internal identifier (`PricingTier.id: "enterprise"`, and the
+unrelated `FirmPlan`/`PLAN_LABELS.enterprise` in
+`lib/billing/plan-limits.ts`) is deliberately untouched — that's the
+real plan key already written to firm rows in the database, and
+renaming it would be a backend/data change, not a content one. Only
+the display string changed.
+
+**One thing this update advertises ahead of what the product actually
+does**, flagged here same as PR #44 flagged its placeholder price:
+**transaction allowances** ("3,000 / 15,000 transactions per month",
+the Basic add-on line, the annual-bonus client slots) — there is no
+transaction-metering, usage-tracking, add-on-purchase, or
+annual-billing system in the codebase. These are marketing copy only,
+same placeholder status as `monthlyPricePhp` has had since PR #44.
+Explicitly instructed not to build any of that logic here — it's
+separate, larger work to come later.
+
+**"Includes AI Receipt Capture" on the Custom tier — added, then
+reverted, per review feedback.** The first commit on this branch
+added that line, reasoning it was a deliberate product decision to
+advertise ahead of launch. On review, explicitly told to keep this
+consistent with PR #44's original call instead: that PR said nothing
+about AI receipt capture because its UI (`claude/receipt-capture-ui`,
+PR #43, the fair-use-cap PR) was still unmerged, and advertising an
+unshipped feature was judged worse than leaving it out. PR #43 is
+*still* unmerged, so the line is removed again — Custom's tagline is
+back to "Custom client capacity and users. Contact us for a quote."
+Add the AI Capture line back in once #43 merges, not before.
+
+**Client limit wording** ("10 active clients" / "30 active clients",
+replacing "Up to N clients") — these numbers aren't new placeholders:
+they're pulled from the same `PLAN_DEFAULTS.basic.maxClients` /
+`.premium.maxClients` as before (10 and 30 respectively), which are
+the real numbers `db/sql/018_plan_limits.sql`'s triggers enforce. Only
+the wording changed, not the source.
+
+**Verified** (both on the initial commit and again after the AI
+Capture line was reverted): no DB available in this sandbox (same
+pre-existing limitation PR #44 documented — `next build`/`next dev`
+can't start without `DATABASE_URL`), so used the same substitute PR
+#44 used: rendered `PricingPage` and `FaqPage` directly via
+`react-dom/server`'s `renderToStaticMarkup`. Both render without
+throwing; checked the output contains every new line verbatim (all
+three tier names including "Custom", zero remaining "Enterprise"
+occurrences on either page, both transaction-allowance lines, the
+add-on line, both annual-bonus lines, the client-definition footnote,
+the plan-positioning note) and, after the revert, that "AI Receipt
+Capture" appears on neither page. `tsc --noEmit` clean. `pnpm test`:
+same 146 passed / 15 skipped / 12 failed as the unmodified baseline,
+unchanged by the revert (the 12 failures are all pre-existing
+`DATABASE_URL`/`MIGRATION_DATABASE_URL` sandbox limitations, unrelated
+to this change — confirmed no pricing/FAQ-specific test exists to
+begin with). `pnpm lint` fails before reaching any file (circular-JSON
+crash inside `@eslint/eslintrc`'s config validator while loading
+`eslint-config-next` — pre-existing tooling issue, not something a
+content edit could cause).
+
+## Pricing page fix: annual price as headline, monthly as reference only
+
+Follow-up to the pricing content update above, same branch/PR (#50).
+The previous commits kept `monthlyPricePhp` as the card's big headline
+number ("₱2,499/month"), which misrepresented how Keep.Books actually
+bills: annually or semi-annually only, never monthly. Checked the rest
+of the codebase first, per instruction, for any existing billing-cycle
+or semi-annual-price source of truth to reconcile against — found
+none (no checkout, payment-processor, or billing-cycle code exists
+anywhere outside this marketing file), so there was nothing to flag a
+conflict against and nothing to invent a semi-annual number from.
+
+**`PricingTier` gained `annualPricePhp`** (the real headline — Basic
+₱29,988, Premium ₱95,988, both = monthlyPricePhp × 12, Custom still
+`null`). `monthlyPricePhp` stays on the type but is now documented as
+a reference-only "≈ ₱X/month" figure shown small and muted underneath
+the annual price, never the primary number — same PLACEHOLDER status
+it's had since PR #44, just no longer presented as a charge.
+
+**New `BILLING_CADENCE_NOTE`** ("Billed annually or semi-annually.")
+renders next to the price on Basic and Premium only — Custom is
+quoted individually and states no fixed cadence, unchanged.
+
+**Verified**: `tsc --noEmit` clean. `pnpm test` unchanged (146 passed
+/ 15 skipped / 12 pre-existing failures). Re-rendered `PricingPage`
+via `react-dom/server` and confirmed: ₱29,988/year and ₱95,988/year
+now appear as the headline (`.../ year` suffix), "≈ ₱2,499/month" and
+"≈ ₱7,999/month" appear as the muted secondary line, the old
+"₱2,499 / month" / "₱7,999 / month" headline format no longer appears
+anywhere, the billing cadence note appears exactly twice (Basic and
+Premium), Custom's card still renders the literal "Custom" price
+unchanged, and every line confirmed in the two prior commits (Custom
+rename, transaction allowances, add-on line, annual bonus copy, no
+"Enterprise" or "AI Receipt Capture" anywhere) is still present.

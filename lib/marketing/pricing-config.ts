@@ -12,17 +12,37 @@ import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
  *   A marketing page promising a different number than what the product
  *   actually enforces would be worse than no page at all, so these are
  *   never restated here.
- * - monthlyPricePhp and REFERRAL_PROGRAM.discountPercent are true
+ * - annualPricePhp, monthlyPricePhp (now a reference/equivalent figure
+ *   only — see below), and REFERRAL_PROGRAM.discountPercent are true
  *   PLACEHOLDERS — there is no billing/payment system yet (see this PR's
  *   description), so nothing in the codebase enforces a price. Update
  *   them here, in one place, rather than hunting through the page
  *   component, once real numbers are ready.
  *
- * Deliberately says nothing about AI receipt capture or its per-month
- * scan cap: that feature (and firms.maxAiScansPerMonth) lives on a
- * separate, not-yet-merged PR, and this Pricing page is built against
- * main as it stands today — advertising a feature that isn't live in
- * production yet would be worse than leaving it out until it ships.
+ * Keep.Books only bills annually or semi-annually — there is no monthly
+ * billing option, confirmed against the rest of the codebase (no
+ * billing-cycle, checkout, or payment-processor code exists anywhere
+ * outside this file). annualPricePhp is therefore the headline price on
+ * each card; monthlyPricePhp is kept only as a small "≈ ₱X/month"
+ * reference figure underneath it, explicitly not something a firm is
+ * ever actually charged. BILLING_CADENCE_NOTE states the real cadence
+ * next to it. If a semi-annual price or a real billing-cycle selector
+ * gets added to the codebase later, reconcile this file against it
+ * rather than assuming these placeholders still apply.
+ *
+ * transactionsIncluded, addOnLine, and ANNUAL_BONUS_OFFER are PLACEHOLDERS
+ * too, same reasoning as monthlyPricePhp: there is no transaction-metering,
+ * usage-tracking, add-on-purchase, or annual-billing system yet, so none of
+ * these numbers are enforced anywhere in the product today. This is a
+ * deliberate, content-only update ahead of that backend work — see
+ * DECISIONS.md's "Pricing content update: Custom plan rename, transaction
+ * allowances, annual bonus" entry.
+ *
+ * Still says nothing about AI receipt capture, same as PR #44's original
+ * reasoning: that feature's UI (claude/receipt-capture-ui, PR #43) is still
+ * unmerged, and advertising a feature that isn't live in production yet
+ * would be worse than leaving it out until it ships. Add it back in once
+ * #43 merges.
  */
 
 export type PricingTierId = "basic" | "premium" | "enterprise";
@@ -31,14 +51,22 @@ export type PricingTier = {
   id: PricingTierId;
   name: string;
   tagline: string;
-  /** PLACEHOLDER. Monthly price in PHP, or null for "Custom" (Enterprise — contact sales, no fixed sticker price). */
+  /** PLACEHOLDER. The actual headline price: full annual total in PHP, or null for "Custom" (contact sales, no fixed sticker price). */
+  annualPricePhp: number | null;
+  /** PLACEHOLDER. Monthly-equivalent reference figure only (annualPricePhp / 12) — never an actual charge. Shown small, underneath the annual price. Null alongside annualPricePhp for "Custom". */
   monthlyPricePhp: number | null;
-  /** Shown as a small tag on the card — Enterprise's "large corporations" positioning, per spec. */
+  /** Shown as a small tag on the card — Custom's "large corporations" positioning, per spec. */
   positioningTag?: string;
   clientsIncluded: string;
+  /** PLACEHOLDER — not enforced by any metering system yet. Omit for tiers with no fixed allowance (e.g. Custom). */
+  transactionsIncluded?: string;
   subUserSeats: string;
   perClientAssignment: boolean;
   features: string[];
+  /** PLACEHOLDER — optional upsell line shown inside the card, below the limits block. No purchase flow exists yet. */
+  addOnLine?: string;
+  /** Whether this tier's card shows the annual-prepay bonus-client-slots offer (see ANNUAL_BONUS_OFFER). */
+  annualBonusEligible?: boolean;
   ctaLabel: string;
 };
 
@@ -55,27 +83,63 @@ export const REFERRAL_PROGRAM = {
     "Refer another bookkeeping firm to Keep.Books. Once they subscribe to a paid plan, you both get 20% off your next billing cycle — our way of saying thanks for spreading the word.",
 };
 
+/**
+ * PLACEHOLDER — shown on every annual-bonus-eligible tier's card (Basic and
+ * Premium; see PricingTier.annualBonusEligible). No annual billing cycle or
+ * bonus-slot grant exists in the product yet.
+ */
+export const ANNUAL_BONUS_OFFER = {
+  headline: "Pay one full year upfront and get 2 bonus client slots, permanently.",
+  finePrint:
+    "Granted once per account with a full annual upfront payment. Yours to keep even if you change your billing cycle later. Semi-annual payments do not qualify.",
+};
+
+/**
+ * Shown next to the price on every tier with a fixed annualPricePhp
+ * (Basic and Premium — Custom is quoted individually, no fixed cadence
+ * to state). There is no monthly billing option.
+ */
+export const BILLING_CADENCE_NOTE = "Billed annually or semi-annually.";
+
+/** Shown once, near the plan cards. */
+export const PLAN_POSITIONING_NOTE =
+  "Basic and Premium are built for small and medium business clients. High-volume clients are covered by Custom.";
+
+/**
+ * Shown once, near the plan comparison. Defines what counts against a
+ * plan's client limit — matters now that cards show a fixed "N active
+ * clients" number instead of "Up to N clients".
+ */
+export const CLIENT_DEFINITION_NOTE =
+  "A client is an active client business managed within your workspace. Archived clients do not use a slot.";
+
 const REPORTS_LINE = "Trial Balance, Income Statement, Balance Sheet, loose-leaf books, and every applicable BIR form";
 
-/** PLACEHOLDER prices — finalize before launch. Everything else here reflects PLAN_DEFAULTS. */
+/** PLACEHOLDER prices (annualPricePhp is the real headline; monthlyPricePhp is a reference equivalent only) — finalize before launch. Everything else here reflects PLAN_DEFAULTS. */
 export const PRICING_TIERS: PricingTier[] = [
   {
     id: "basic",
     name: "Basic",
     tagline: "For a solo bookkeeper managing a handful of clients",
+    annualPricePhp: 29988,
     monthlyPricePhp: 2499,
-    clientsIncluded: `Up to ${PLAN_DEFAULTS.basic.maxClients} clients`,
+    clientsIncluded: `${PLAN_DEFAULTS.basic.maxClients} active clients`,
+    transactionsIncluded: "3,000 transactions per month",
     subUserSeats: `${PLAN_DEFAULTS.basic.maxUsers} user seats`,
     perClientAssignment: PLAN_DEFAULTS.basic.perClientAssignmentAllowed,
     features: ["Chart of accounts + manual transaction encoding", REPORTS_LINE, "Client portal for document sharing", "Email support"],
+    addOnLine: "Need a little more room? Add 5 clients and 1,500 transactions a month for ₱7,500/year.",
+    annualBonusEligible: true,
     ctaLabel: "Start your free trial",
   },
   {
     id: "premium",
     name: "Premium",
     tagline: "For a growing practice managing multiple clients with a small team",
+    annualPricePhp: 95988,
     monthlyPricePhp: 7999,
-    clientsIncluded: `Up to ${PLAN_DEFAULTS.premium.maxClients} clients`,
+    clientsIncluded: `${PLAN_DEFAULTS.premium.maxClients} active clients`,
+    transactionsIncluded: "15,000 transactions per month",
     subUserSeats: `${PLAN_DEFAULTS.premium.maxUsers} user seats`,
     perClientAssignment: PLAN_DEFAULTS.premium.perClientAssignmentAllowed,
     features: [
@@ -85,12 +149,14 @@ export const PRICING_TIERS: PricingTier[] = [
       "Assign specific bookkeepers to specific clients",
       "Priority email support",
     ],
+    annualBonusEligible: true,
     ctaLabel: "Start your free trial",
   },
   {
     id: "enterprise",
-    name: "Enterprise",
-    tagline: "For large corporations and multi-branch firms with custom needs",
+    name: "Custom",
+    tagline: "Custom client capacity and users. Contact us for a quote.",
+    annualPricePhp: null,
     monthlyPricePhp: null,
     positioningTag: "Recommended for large corporations",
     clientsIncluded: "Custom — sized to your firm",
