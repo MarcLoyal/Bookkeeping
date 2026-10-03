@@ -4581,3 +4581,76 @@ Premium), Custom's card still renders the literal "Custom" price
 unchanged, and every line confirmed in the two prior commits (Custom
 rename, transaction allowances, add-on line, annual bonus copy, no
 "Enterprise" or "AI Receipt Capture" anywhere) is still present.
+
+## Restore Recent Activity / Audit Log (root cause confirmed fixed), with explicit per-firm filtering added
+
+PR #48's hotfix took the dashboard's "Recent Activity" panel and
+`/settings/audit-log` offline after a confirmed-live cross-firm
+audit_log leak, pending root-cause confirmation. You've now confirmed
+production is stable after the `keepbooks_app` connection fix — RLS is
+enforced correctly, verified by clicking around the real app. This PR
+restores both surfaces.
+
+**Checked first, per your instruction, whether `listRecentAuditLog()`
+was scoped correctly per-firm independent of RLS — it was not.** The
+query had no `WHERE` clause of its own at all: a plain join + `ORDER
+BY` + `LIMIT`, scoped to the caller's firm *only* via RLS through
+`withUserContext()`. That's the exact single point of failure this
+leak came from — RLS was silently not applying (wrong DB role), and
+nothing else in the query stood in the way. Worth noting this isn't
+unique to this function: `lib/data/clients.ts#listClients()`'s own
+comment says "RLS... no manual filtering needed," which is this
+codebase's normal pattern for most data-layer functions. I'm not
+touching that broader pattern here — it's out of scope for this PR and
+arguably fine for functions that have never actually leaked. But this
+specific function already has, once, so it gets the redundant filter.
+
+**Fix**: `listRecentAuditLog(userId, limit)` → `listRecentAuditLog(userId,
+firmId, limit)`, with a real `.where(eq(users.firmId, firmId))` added
+to the query. RLS stays on as defense in depth (still enforced via
+`withUserContext`), but the query itself no longer depends on RLS
+being the only thing keeping firms apart — a repeat of the exact
+failure mode that caused the original leak (wrong DB role/connection)
+can't reproduce it through this function again. Both callers
+(`app/(app)/dashboard/page.tsx`, `app/(app)/settings/audit-log/page.tsx`)
+updated to pass `user.firmId`, guarded the same way
+`app/api/clients/route.ts` already guards a nullable `firmId` (`if
+(!user.firmId)` rather than a non-null assertion) since `CurrentUser.
+firmId` is typed `string | null` even though a `firm_admin` always has
+one in practice.
+
+**Confirmed with a real test, not just a read of the code**: brought
+over PR #47's `db/__tests__/audit-log-cross-firm-isolation.test.ts`
+(two real firms, real LOGIN/LOGIN_FAILED/SIGNUP-shaped audit_log rows,
+asserting one firm's Owner never sees the other's — by id and by firm),
+adapted for the new `firmId` parameter, and added a new describe block
+that goes further than PR #47's version could: it runs the identical
+join+filter query directly via the migration/owner role — the same
+role class whose misconfiguration caused the original leak, which is
+NOT subject to RLS — and confirms the explicit filter alone, with RLS
+completely bypassed, still correctly keeps Firm A's and Firm B's rows
+apart. That's the most direct way this suite can prove "not just
+relying on RLS alone": the isolation holds even in the exact scenario
+that caused the original leak.
+
+**Verified against a real local Postgres** (this sandbox previously
+had none configured — set one up for this PR specifically: `keepbooks`
+owner role + db, `pnpm db:migrate` to create `keepbooks_app` and apply
+every migration, `pnpm seed`). `tsc --noEmit` clean. `pnpm test`:
+**315/315 passed** (the previous 308-test baseline plus 7 new tests in
+this file; zero failures, zero skips — strictly better than every
+previous verification pass on this repo's recent PRs, which could only
+reach a partial pass without a live DB). `pnpm build` **succeeded
+cleanly** for the first time in this sandbox's history across the last
+several PRs — `/dashboard` and `/settings/audit-log` both compile and
+appear in the route list as dynamic (`ƒ`) routes, confirming they
+still render as real Server Components, not accidentally statically
+prerendered. `pnpm lint` still fails with the same pre-existing
+circular-JSON `@eslint/eslintrc` crash documented on the pricing PRs —
+confirmed unrelated by reproducing it on an unmodified checkout before
+making any changes here. Grepped for every remaining caller of
+`listRecentAuditLog()` and every leftover "SECURITY HOTFIX"/
+"Temporarily unavailable" marker — none found outside this file's own
+history.
+
+Left as a new PR, unmerged, for your review, per instruction.
