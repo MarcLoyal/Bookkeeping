@@ -17,15 +17,29 @@ export type AuditLogRow = {
 };
 
 /**
- * Most recent mutations firm-wide (rule #4). RLS already scopes this to
- * firm_admin/reviewer and to actors within the caller's own firm.
+ * Most recent mutations firm-wide (rule #4).
+ *
+ * Takes `firmId` and filters on it explicitly — not RLS alone. RLS (via
+ * withUserContext) still enforces the same firm_admin/reviewer-and-
+ * own-firm boundary and stays on as defense in depth, but this query no
+ * longer *depends* on RLS being the only thing standing between one
+ * firm's audit_log rows and another's. This specific function previously
+ * took only `userId`, relied solely on RLS, and leaked cross-firm data
+ * in production for exactly that reason (the app was briefly connecting
+ * through a role that doesn't enforce RLS — see DECISIONS.md's "Hotfix:
+ * Recent Activity / Audit Log taken offline" and the restore entry that
+ * added this parameter). A real, redundant predicate here means a repeat
+ * of that specific failure mode (wrong DB role/connection) can't
+ * reproduce the same leak through this function again — the query
+ * itself would still return nothing for another firm even if RLS were
+ * silently bypassed.
  *
  * Selects before/after only to derive `description` server-side (e.g. role
  * changes) — never returned as raw JSON, since `users` rows include
  * password_hash and this data layer's job is to keep that from ever
  * reaching a client component.
  */
-export async function listRecentAuditLog(userId: string, limit = 200): Promise<AuditLogRow[]> {
+export async function listRecentAuditLog(userId: string, firmId: string, limit = 200): Promise<AuditLogRow[]> {
   return withUserContext(userId, async (tx) => {
     const rows = await tx
       .select({
@@ -42,6 +56,7 @@ export async function listRecentAuditLog(userId: string, limit = 200): Promise<A
       })
       .from(auditLog)
       .innerJoin(users, eq(auditLog.actorUserId, users.id))
+      .where(eq(users.firmId, firmId))
       .orderBy(desc(auditLog.createdAt))
       .limit(limit);
 

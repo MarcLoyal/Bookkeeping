@@ -4581,3 +4581,137 @@ Premium), Custom's card still renders the literal "Custom" price
 unchanged, and every line confirmed in the two prior commits (Custom
 rename, transaction allowances, add-on line, annual bonus copy, no
 "Enterprise" or "AI Receipt Capture" anywhere) is still present.
+
+## Restore Recent Activity / Audit Log (root cause confirmed fixed), with explicit per-firm filtering added
+
+PR #48's hotfix took the dashboard's "Recent Activity" panel and
+`/settings/audit-log` offline after a confirmed-live cross-firm
+audit_log leak, pending root-cause confirmation. You've now confirmed
+production is stable after the `keepbooks_app` connection fix — RLS is
+enforced correctly, verified by clicking around the real app. This PR
+restores both surfaces.
+
+**Checked first, per your instruction, whether `listRecentAuditLog()`
+was scoped correctly per-firm independent of RLS — it was not.** The
+query had no `WHERE` clause of its own at all: a plain join + `ORDER
+BY` + `LIMIT`, scoped to the caller's firm *only* via RLS through
+`withUserContext()`. That's the exact single point of failure this
+leak came from — RLS was silently not applying (wrong DB role), and
+nothing else in the query stood in the way. Worth noting this isn't
+unique to this function: `lib/data/clients.ts#listClients()`'s own
+comment says "RLS... no manual filtering needed," which is this
+codebase's normal pattern for most data-layer functions. I'm not
+touching that broader pattern here — it's out of scope for this PR and
+arguably fine for functions that have never actually leaked. But this
+specific function already has, once, so it gets the redundant filter.
+
+**Fix**: `listRecentAuditLog(userId, limit)` → `listRecentAuditLog(userId,
+firmId, limit)`, with a real `.where(eq(users.firmId, firmId))` added
+to the query. RLS stays on as defense in depth (still enforced via
+`withUserContext`), but the query itself no longer depends on RLS
+being the only thing keeping firms apart — a repeat of the exact
+failure mode that caused the original leak (wrong DB role/connection)
+can't reproduce it through this function again. Both callers
+(`app/(app)/dashboard/page.tsx`, `app/(app)/settings/audit-log/page.tsx`)
+updated to pass `user.firmId`, guarded the same way
+`app/api/clients/route.ts` already guards a nullable `firmId` (`if
+(!user.firmId)` rather than a non-null assertion) since `CurrentUser.
+firmId` is typed `string | null` even though a `firm_admin` always has
+one in practice.
+
+**Confirmed with a real test, not just a read of the code**: brought
+over PR #47's `db/__tests__/audit-log-cross-firm-isolation.test.ts`
+(two real firms, real LOGIN/LOGIN_FAILED/SIGNUP-shaped audit_log rows,
+asserting one firm's Owner never sees the other's — by id and by firm),
+adapted for the new `firmId` parameter, and added a new describe block
+that goes further than PR #47's version could: it runs the identical
+join+filter query directly via the migration/owner role — the same
+role class whose misconfiguration caused the original leak, which is
+NOT subject to RLS — and confirms the explicit filter alone, with RLS
+completely bypassed, still correctly keeps Firm A's and Firm B's rows
+apart. That's the most direct way this suite can prove "not just
+relying on RLS alone": the isolation holds even in the exact scenario
+that caused the original leak.
+
+**Verified against a real local Postgres** (this sandbox previously
+had none configured — set one up for this PR specifically: `keepbooks`
+owner role + db, `pnpm db:migrate` to create `keepbooks_app` and apply
+every migration, `pnpm seed`). `tsc --noEmit` clean. `pnpm test`:
+**315/315 passed** (the previous 308-test baseline plus 7 new tests in
+this file; zero failures, zero skips — strictly better than every
+previous verification pass on this repo's recent PRs, which could only
+reach a partial pass without a live DB). `pnpm build` **succeeded
+cleanly** for the first time in this sandbox's history across the last
+several PRs — `/dashboard` and `/settings/audit-log` both compile and
+appear in the route list as dynamic (`ƒ`) routes, confirming they
+still render as real Server Components, not accidentally statically
+prerendered. `pnpm lint` still fails with the same pre-existing
+circular-JSON `@eslint/eslintrc` crash documented on the pricing PRs —
+confirmed unrelated by reproducing it on an unmodified checkout before
+making any changes here. Grepped for every remaining caller of
+`listRecentAuditLog()` and every leftover "SECURITY HOTFIX"/
+"Temporarily unavailable" marker — none found outside this file's own
+history.
+
+Left as a new PR, unmerged, for your review, per instruction.
+
+## Timestamps displayed in Philippine time, not raw UTC
+
+Reported: the Recent Activity panel and `/settings/audit-log` showed
+timestamps in raw UTC (e.g. "2026-10-03 17:14" when it was already
+past midnight on Oct 4 in the Philippines). Storage stays UTC — this
+is display-only, per instruction.
+
+**Checked first, per instruction, for a shared date/time formatting
+utility to fix in one place — none existed.** Every file in the
+codebase formatted dates ad hoc with raw `.toISOString()` calls; no
+`lib/format-date.ts` or equivalent. Flagged this back rather than
+guessing at scope: found the identical full-date+time-in-UTC bug in
+two more places you hadn't mentioned (`platform-firms-table.tsx`'s
+expanded firm row — "Signed up" and "Last active"), plus three
+related-but-distinct date-*only* displays computed the same ad-hoc
+UTC way (platform admins' "added" date, tax rules' "last verified"
+date, a reversal-entry form's default date input) that could show the
+wrong calendar day near midnight PH but never a wrong clock time.
+Explicitly did not lump in BIR deadline due-dates or report
+date-range defaults — those construct deliberate UTC-midnight
+calendar dates or touch what counts as "today" for business logic
+(deadline windows), not a stored timestamp displayed without
+conversion; out of scope both by category and by your own "only
+change display" instruction.
+
+**You chose**: fix all 4 identical-bug spots (the 2 named pages + the
+2 Platform Admin dashboard spots), leave the date-only displays and
+the business-logic date boundaries alone for now.
+
+**`lib/format-datetime.ts`** (new): `formatDateTimePH(date, { seconds?
+})` — converts a `Date | string` to Philippine time (`Asia/Manila`)
+and formats it as `YYYY-MM-DD HH:MM` (or `HH:MM:SS` with `seconds:
+true`, matching `/settings/audit-log`'s existing extra precision,
+which the dashboard panel never had — preserved that difference
+rather than flattening it). Uses `Intl.DateTimeFormat` with `timeZone:
+"Asia/Manila"` rather than a hardcoded `+8` offset, so it stays
+correct against the runtime's own IANA tzdata; `hourCycle: "h23"`
+specifically (not `hour12: false`) to avoid a known Intl quirk where
+some locale/engine combinations render midnight as `24:00`.
+
+Applied to all 4 confirmed spots: `app/(app)/dashboard/page.tsx`
+(Recent Activity), `app/(app)/settings/audit-log/page.tsx` (with
+seconds, matching its prior precision), and both full-timestamp spots
+in `app/(app)/dashboard/platform-firms-table.tsx` — its separate,
+date-only `formatDate()` helper (used by the table's own "created"/
+"last active" columns, a different, out-of-scope display) is
+untouched.
+
+**Verified**: `lib/__tests__/format-datetime.test.ts` (new, 8 tests) —
+the exact reported scenario (`2026-10-03T17:14:00Z` → `2026-10-04
+01:14`), a non-rollover case, zero-padding, a year-boundary rollover,
+midnight rendering as `00:00` not `24:00`, and the `seconds` option
+both set and default. `tsc --noEmit` clean. `pnpm test`: 323/323
+passed (the 315-test baseline from the previous PR plus these 8, zero
+failures). `pnpm build` succeeded cleanly, `/dashboard` and
+`/settings/audit-log` both still compile as dynamic routes. Grepped
+for every remaining `.toISOString().replace("T", " ")` occurrence —
+none left outside this new file's own doc comment describing the old
+pattern. `pnpm lint` still fails with the same pre-existing
+`@eslint/eslintrc` circular-JSON crash documented on recent PRs.
