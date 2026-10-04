@@ -10,6 +10,9 @@ import {
   TRIAL_OFFER,
   type PricingTier,
 } from "@/lib/marketing/pricing-config";
+import { getCurrentUser } from "@/lib/auth/current-user";
+import { getFirmPlanStatus } from "@/lib/data/firm-plan-status";
+import { PLAN_LABELS, type FirmPlan } from "@/lib/billing/plan-limits";
 
 export const metadata = {
   title: "Pricing — Keep.Books",
@@ -20,7 +23,23 @@ function formatPhp(amount: number) {
   return `₱${amount.toLocaleString("en-PH")}`;
 }
 
-function TierCard({ tier }: { tier: PricingTier }) {
+// No self-serve billing/checkout exists yet (see this file's own PRICING_TIERS
+// comment) — relative standing only decides the wording ("Upgrade" vs "Switch
+// Plan"), never which actions are actually allowed. 'trial'/'free' both rank
+// below the two real paid tiers shown here, so moving off either one always
+// reads as an upgrade.
+const PLAN_RANK: Record<FirmPlan, number> = { trial: 0, free: 0, basic: 1, premium: 2, enterprise: 3 };
+
+const SUPPORT_EMAIL = "mrcabanador@gmail.com";
+
+function buildPlanChangeMailto(tier: PricingTier, currentPlan: FirmPlan) {
+  const upgrading = PLAN_RANK[tier.id] > PLAN_RANK[currentPlan];
+  const subject = `I want to ${upgrading ? "upgrade to" : "switch to"} ${tier.name}`;
+  const body = `Hi, I'd like to ${upgrading ? "upgrade" : "switch"} my firm from the ${PLAN_LABELS[currentPlan]} plan to the ${tier.name} plan. Please let me know the next steps.`;
+  return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function TierCard({ tier, currentPlan }: { tier: PricingTier; currentPlan: FirmPlan | null }) {
   const highlighted = tier.id === "enterprise";
   return (
     <div
@@ -84,19 +103,47 @@ function TierCard({ tier }: { tier: PricingTier }) {
         </div>
       )}
 
-      <Link
-        href="/signup"
-        className={`mt-6 block rounded-md px-4 py-2.5 text-center text-sm font-medium ${
+      {(() => {
+        const ctaClassName = `mt-6 block rounded-md px-4 py-2.5 text-center text-sm font-medium ${
           highlighted ? "border border-slate-300 text-slate-900 hover:bg-slate-50" : "bg-slate-900 text-white hover:bg-slate-800"
-        }`}
-      >
-        {tier.ctaLabel}
-      </Link>
+        }`;
+
+        // Enterprise keeps its existing "Contact us" → /signup link unchanged
+        // regardless of login state — it has no fixed tier to compare a
+        // signed-in firm's plan against in the first place.
+        if (tier.id === "enterprise" || currentPlan === null) {
+          return (
+            <Link href="/signup" className={ctaClassName}>
+              {tier.ctaLabel}
+            </Link>
+          );
+        }
+
+        if (currentPlan === tier.id) {
+          return (
+            <span className="mt-6 block cursor-not-allowed rounded-md border border-slate-200 bg-slate-100 px-4 py-2.5 text-center text-sm font-medium text-slate-500">
+              Current Plan
+            </span>
+          );
+        }
+
+        const upgrading = PLAN_RANK[tier.id] > PLAN_RANK[currentPlan];
+        return (
+          <a href={buildPlanChangeMailto(tier, currentPlan)} className={ctaClassName}>
+            {upgrading ? "Upgrade" : "Switch Plan"}
+          </a>
+        );
+      })()}
     </div>
   );
 }
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const user = await getCurrentUser();
+  // null covers both "not logged in" and "logged in but no firm plan to
+  // compare against" (platform_admin, client_user) — both fall back to the
+  // same default signup-flow button as a logged-out visitor.
+  const currentPlan = user?.firmId ? (await getFirmPlanStatus(user.id))?.plan ?? null : null;
   return (
     <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6">
       <div className="mx-auto max-w-2xl text-center">
@@ -119,7 +166,7 @@ export default function PricingPage() {
 
       <div className="mx-auto mt-6 grid max-w-5xl gap-6 md:grid-cols-3">
         {PRICING_TIERS.map((tier) => (
-          <TierCard key={tier.id} tier={tier} />
+          <TierCard key={tier.id} tier={tier} currentPlan={currentPlan} />
         ))}
       </div>
 
