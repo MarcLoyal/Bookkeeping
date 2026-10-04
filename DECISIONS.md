@@ -4715,3 +4715,70 @@ for every remaining `.toISOString().replace("T", " ")` occurrence —
 none left outside this new file's own doc comment describing the old
 pattern. `pnpm lint` still fails with the same pre-existing
 `@eslint/eslintrc` circular-JSON crash documented on recent PRs.
+
+## Pricing page: login/plan-aware CTA buttons
+
+Every tier card's button always said "Start your free trial" and
+linked to `/signup`, even for an already-logged-in visitor viewing
+their own firm's current plan or a different one — this makes the
+button login- and plan-aware instead.
+
+**No contact/request mechanism existed anywhere to reuse** — checked
+before building anything, as asked: Custom's existing "Contact us"
+button is just the same `<Link href="/signup">` every other tier uses
+(only the label differs, no distinct flow); the Owner-facing
+plan-status banner's "Contact us to upgrade" text
+(`app/(app)/plan-status-banner.tsx`) is plain text, not a link, and
+this codebase's own `DECISIONS.md` already says so directly ("the app
+has no existing 'contact us' channel to reuse, so the banner just says
+'contact us'"); and no support email constant exists anywhere
+(`.env.example`, `README.md`, grepped the whole tree). Confirmed with
+you directly, which real inbox to use, since nothing here could supply
+one: `mrcabanador@gmail.com`.
+
+**Logic** (`app/(marketing)/pricing/page.tsx`, now an async Server
+Component):
+- Not logged in, or logged in with no resolvable firm plan
+  (`platform_admin`, `client_user` — neither owns a firm's billing
+  plan): unchanged "Start your free trial" → `/signup`, same as
+  before.
+- Logged in, viewing the tier matching `getFirmPlanStatus(user.id)`'s
+  current plan: disabled "Current Plan" `<span>`, no link, no action.
+- Logged in, viewing a different tier: `mailto:` link, pre-filled
+  subject/body naming the requested plan — "Upgrade" if the target
+  tier outranks the current one, "Switch Plan" (my call on wording,
+  per your instruction) if it's a downgrade. Rank: `trial`/`free` both
+  below `basic` < `premium` < `enterprise`, so leaving a trial or the
+  free tier for either paid plan always reads as an upgrade.
+- Custom (`id: "enterprise"`) is excluded from all of the above and
+  keeps its existing "Contact us" → `/signup` link unchanged
+  regardless of login state, exactly as asked — it has no fixed
+  tier to compare a signed-in firm's plan against.
+
+Reuses `getFirmPlanStatus()` (already used by `AppLayout`'s plan
+banner) rather than a new query — it's already scoped correctly via
+`firms_select`'s RLS (`id = app_current_firm_id()`, no role
+restriction), so any firm-scoped role's own plan resolves correctly,
+not just `firm_admin`'s.
+
+**Merge conflict while branching**: `main` had moved since this
+session's last pull (a separate pricing-content PR — annual pricing,
+transaction allowances, the annual-bonus block, Custom's rename —
+already merged). Rebased onto current `main` and resolved by hand:
+kept that PR's price/content blocks entirely as-is, and only replaced
+the old unconditional `<Link href="/signup">{tier.ctaLabel}</Link>`
+with this new conditional block in the same position (after the
+annual-bonus block, same as before).
+
+**Verified**: `tsc --noEmit` and `pnpm build` both clean (`/pricing`
+still compiles, now correctly dynamic rather than static, same as
+every other page here that reads `cookies()` via `getCurrentUser()` —
+expected, not a regression, and consistent with the caching
+investigation earlier in this file that confirmed dynamic rendering is
+exactly what keeps a per-user page off Vercel's CDN cache). `pnpm
+test`: the 146 non-DB unit tests pass; the 12 DB-backed RLS/acceptance
+suites fail with `ECONNREFUSED 127.0.0.1:5432` — no local Postgres is
+reachable in this sandbox right now, a pre-existing environment gap
+unrelated to this change (pure presentational logic, no schema/RLS/
+data-layer change). `pnpm lint` still fails with the same pre-existing
+`@eslint/eslintrc` circular-JSON crash.
