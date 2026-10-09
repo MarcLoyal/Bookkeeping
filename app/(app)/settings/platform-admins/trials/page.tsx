@@ -17,8 +17,8 @@ export default async function ExpiredTrialsPage() {
     <div>
       <h2 className="text-lg font-semibold">Expired Trials</h2>
       <p className="mt-1 text-sm text-slate-500">
-        Firms flagged by the day-8 trial check. Billing isn&apos;t automated yet — nothing here happens on its own; pick an
-        action per firm below.
+        Every trial-plan firm whose 7-day trial has ended, whether or not anyone from the firm has logged back in since.
+        Billing isn&apos;t automated yet — nothing here happens on its own; pick an action per firm below.
       </p>
 
       <div className="mt-4 max-w-xs">

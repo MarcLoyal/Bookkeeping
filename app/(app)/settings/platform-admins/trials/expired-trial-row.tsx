@@ -212,7 +212,7 @@ export function ExpiredTrialRow({ firm }: { firm: ExpiredTrialFirmRow }) {
           <div className="font-medium text-slate-900">{firm.name}</div>
           <div className="mt-0.5 text-xs text-slate-500">
             {firm.ownerName ?? "No owner"}
-            {firm.ownerEmail && ` · ${firm.ownerEmail}`} · Currently {PLAN_LABELS[firm.plan]} · Flagged {daysSince(firm.trialExpiredFlaggedAt)}d ago
+            {firm.ownerEmail && ` · ${firm.ownerEmail}`} · Currently {PLAN_LABELS[firm.plan]} · Expired {daysSince(firm.trialEndsAt)}d ago
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

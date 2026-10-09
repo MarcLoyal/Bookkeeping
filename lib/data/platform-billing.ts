@@ -1,5 +1,5 @@
 import "server-only";
-import { asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, lt } from "drizzle-orm";
 import { withUserContext } from "@/db/client";
 import { firms, users } from "@/db/schema";
 import type { FirmPlan } from "@/lib/billing/plan-limits";
@@ -10,18 +10,28 @@ export type ExpiredTrialFirmRow = {
   plan: FirmPlan;
   ownerName: string | null;
   ownerEmail: string | null;
-  trialExpiredFlaggedAt: Date;
+  trialEndsAt: Date;
 };
 
 /**
- * The platform admin dashboard's expired-trial queue: every firm whose
- * day-8 check (flagTrialExpiredIfNeeded(), lib/billing/flag-expired-
- * trials.ts) has already flagged it, oldest flag first — matching "a
- * queue," not most-recent-first. Only reads `trialExpiredFlaggedAt`, not
- * `trialEndsAt` directly: a firm a platform admin already extended (which
- * clears the flag, see extend-firm-trial.ts) or changed off trial (which
- * also clears it, see set-firm-plan.ts) correctly falls out of this list
- * even if its old trialEndsAt is technically still in the past.
+ * The platform admin dashboard's expired-trial queue: every firm still on
+ * the trial plan whose trialEndsAt has passed, oldest-expired first —
+ * computed directly from the date, not from trialExpiredFlaggedAt.
+ *
+ * Deliberately NOT keyed off the flag: flagTrialExpiredIfNeeded()
+ * (lib/billing/flag-expired-trials.ts) only runs as a side effect of
+ * someone from the firm logging in, so a trial that signs up and never
+ * comes back would never get flagged and would sit invisible to platform
+ * admins forever — exactly the case that matters most here. A trial is
+ * expired once its date has passed, full stop; whether anyone from the
+ * firm has been active since plays no part in that.
+ *
+ * `plan = 'trial'` alone already excludes a firm a platform admin
+ * extended (extend-firm-trial.ts moves trialEndsAt into the future,
+ * which fails `lt(trialEndsAt, now())` on its own) or moved off trial
+ * entirely (set-firm-plan.ts / downgrade-firm-to-free.ts both change
+ * `plan` away from 'trial') — no separate flag needed to keep either
+ * case out of this list.
  *
  * Runs through withUserContext, not authDb: firms_select_platform_admin
  * (007_platform_admin_dashboard.sql) already grants platform_admin
@@ -34,10 +44,10 @@ export async function listExpiredTrialFirms(platformAdminId: string): Promise<Ex
   return withUserContext(platformAdminId, async (tx) => {
     const [firmRows, ownerRows] = await Promise.all([
       tx
-        .select({ id: firms.id, name: firms.name, plan: firms.plan, trialExpiredFlaggedAt: firms.trialExpiredFlaggedAt })
+        .select({ id: firms.id, name: firms.name, plan: firms.plan, trialEndsAt: firms.trialEndsAt })
         .from(firms)
-        .where(isNotNull(firms.trialExpiredFlaggedAt))
-        .orderBy(asc(firms.trialExpiredFlaggedAt)),
+        .where(and(eq(firms.plan, "trial"), lt(firms.trialEndsAt, new Date())))
+        .orderBy(asc(firms.trialEndsAt)),
       tx
         .select({ firmId: users.firmId, name: users.name, email: users.email, createdAt: users.createdAt })
         .from(users)
@@ -65,7 +75,7 @@ export async function listExpiredTrialFirms(platformAdminId: string): Promise<Ex
         ownerEmail: owner?.email ?? null,
         // Non-null by the WHERE clause above — asserted, not re-checked,
         // to keep the row type callers see (ExpiredTrialFirmRow) honest.
-        trialExpiredFlaggedAt: firm.trialExpiredFlaggedAt!,
+        trialEndsAt: firm.trialEndsAt!,
       };
     });
   });

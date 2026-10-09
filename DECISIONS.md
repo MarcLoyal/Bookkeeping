@@ -4836,3 +4836,151 @@ repeating the exact "missing `GRANT`" failure that caused this
 incident — someone would have to remember to add an explicit grant
 by hand again, the same gap 016 and 022 each closed one table too
 late.
+
+## Expired-trial queue: date-based, not activity-based
+
+Reported: NEMAR BUILDERS (signed up, never logged in again) and Zhianna
+Sari-sari Store (signed up, logged in once, quiet since) both have
+7-day trials that ended days ago, but neither showed up in
+`/settings/platform-admins/trials`. Root cause and fix, in the order
+asked for.
+
+**1. Everything that reads or writes `trialExpiredFlaggedAt`, checked
+before changing anything:**
+
+Writers:
+- `flagTrialExpiredIfNeeded()` (`lib/billing/flag-expired-trials.ts`) —
+  sets it, lazily, only as a side effect of `getCurrentUser()`, i.e.
+  only when someone from the firm is actively logging in. This is the
+  root cause: a firm that never logs back in after its trial ends never
+  trips this, ever, no matter how much time passes.
+- `extendFirmTrial()` / `setFirmPlan()` / `downgradeFirmToFree()` — all
+  three clear it back to `NULL` whenever a platform admin extends a
+  trial or moves a firm off it. Left unchanged; still correct, still
+  useful for keeping the "first noticed" marker honest after a reset.
+
+Readers:
+- `listExpiredTrialFirms()` (`lib/data/platform-billing.ts`) — the only
+  one that mattered. It read `trialExpiredFlaggedAt` exclusively to
+  decide queue membership, which is exactly backwards for a firm that
+  never comes back. **Changed** — now checks `trialEndsAt` directly.
+- `expired-trial-row.tsx`'s display ("Flagged Xd ago"). **Changed** —
+  once the queue could return a row with a `NULL` flag (the abandoned
+  case), the old `ExpiredTrialFirmRow.trialExpiredFlaggedAt: Date`
+  (non-null) type and its `!`-asserted value would have been a lie.
+  Switched the row's own type to `trialEndsAt: Date` (genuinely
+  non-null, guaranteed by the new query's own `WHERE`) and the display
+  to "Expired Xd ago," consistent with the same date-not-activity
+  philosophy everywhere else in this fix.
+- `db/__tests__/plan-limits-downgrade.test.ts`'s `listExpiredTrialFirms()`
+  block. **Changed** — rewritten around the new date-based behavior,
+  plus a new fixture (`ABANDONED_FIRM_ID`) with `trialEndsAt` in the
+  past and the flag left `NULL`, asserting it now appears.
+
+Nothing else in the codebase reads this column at all (confirmed by
+grep, not assumed).
+
+**2. `listExpiredTrialFirms()`**: now `WHERE plan = 'trial' AND
+trialEndsAt < now()`, ordered by `trialEndsAt` ascending (most-overdue
+first — a more useful queue order than "whenever a visit happened to
+flag it," and a side benefit of the fix, not just incidental).
+`plan = 'trial'` alone already keeps an extended or moved-off-trial
+firm out of the list without needing the flag for that either — both
+`extendFirmTrial()` and `setFirmPlan()`/`downgradeFirmToFree()` either
+push `trialEndsAt` into the future or null it out alongside changing
+`plan`, so the old comment's "extended/moved-off firms must stay
+excluded" concern is still fully covered, just by the real columns
+instead of a lazily-set flag.
+
+**3. Audited `trialEndsAt` correctness**: new `pnpm audit-trial-ends-at`
+(`scripts/audit-trial-ends-at.ts`, read-only, run against
+`MIGRATION_DATABASE_URL`) compares every current `plan = 'trial'`
+firm's `trialEndsAt` against `createdAt + 7 days` and reports anything
+outside a 10-minute tolerance, cross-referencing `audit_log` for a
+`TRIAL_EXTENDED`/`PLAN_CHANGE` event on that firm first (either one
+legitimately moves `trialEndsAt` away from `createdAt + 7d`, so a
+flagged firm isn't automatically wrong). Doesn't touch anything —
+prints findings for you to review. Run this against production and
+send me the output; I haven't changed any firm's `trialEndsAt` myself.
+
+**4. Backfill**: `db/sql/023_backfill_trial_expired_flag.sql` — a
+one-time `UPDATE firms SET trial_expired_flagged_at = now() WHERE
+plan = 'trial' AND trial_ends_at < now() AND trial_expired_flagged_at
+IS NULL`. Not required for the queue fix itself (that's entirely
+`listExpiredTrialFirms()`'s new `WHERE` clause, independent of this
+column) — it exists purely so the flag stays truthful as a historical
+record for every trial that's already expired, rather than sitting
+`NULL` forever on exactly the firms this whole fix is about. One-time,
+not re-applied on future runs; `flagTrialExpiredIfNeeded()` keeps
+working the same lazy way afterward for any firm that does log back in.
+
+**5. What an expired-but-not-yet-downgraded firm experiences on
+login — traced through the real code, not assumed, since live clients
+are on this system:**
+
+Nothing restrictive. Confirmed no code path anywhere — middleware,
+`requireCurrentUser()`/`requireStaffUser()`, or `018_plan_limits.sql`'s
+DB triggers — gates on `trialEndsAt` or `trialExpiredFlaggedAt` at all.
+A firm stays on the `trial` plan, at trial-level limits
+(`PLAN_DEFAULTS.trial`: 10 clients, 5 users, per-client assignment
+allowed) exactly as before, until a platform admin manually clicks
+"Downgrade to Free" or "Change plan" from this queue — that part was
+already true before this fix and is completely unchanged by it. The
+**only** user-visible difference an Owner sees is
+`PlanStatusBanner` (`app/(app)/plan-status-banner.tsx`), already
+existing, unchanged by this PR: an amber "Your trial has ended...
+Contact us to upgrade" notice once `trialEndsAt` has passed, which was
+already showing before this fix and keeps showing the same way after
+it. **This fix only changes what platform admins can see in the
+queue — it adds no new restriction, lockout, or behavior change for
+any firm or its users.**
+
+**Verified for real, not just reviewed** — this sandbox had no local
+Postgres reachable at the start of this task (same gap as recent PRs);
+started one (`pg_ctlcluster 16 main start`) and ran everything for
+real rather than trusting static review on logic this consequential:
+- `pnpm db:migrate` — applied 023 cleanly, confirmed the unconditional
+  `keepbooks_app` re-grant (PR #49, merged earlier this session) runs
+  too.
+- `pnpm test` — **325/325 passed**, including the rewritten
+  `listExpiredTrialFirms()` block and the new
+  `023_backfill_trial_expired_flag.sql` describe block (which executes
+  the migration file's own exact SQL text via `readFileSync`, not a
+  re-typed copy, against fixture firms covering all four cases: gets
+  backfilled, already-flagged stays untouched, not-yet-expired stays
+  untouched, non-trial stays untouched).
+- `pnpm audit-trial-ends-at` — ran clean against this local DB.
+- **Full wipe-and-reseed from scratch** (`drop schema public cascade`
+  + the `drizzle` tracking schema, `db:migrate`, `seed`) to prove the
+  two new example seed firms work on a genuinely fresh environment —
+  the closest thing to "a freshly provisioned preview project" this
+  sandbox can produce. Queried `listExpiredTrialFirms()`'s exact
+  `WHERE`/`JOIN` directly afterward: both example firms came back with
+  correct owner name/email and `trialEndsAt` — real proof, not
+  inference.
+- `tsc --noEmit` and `pnpm build` both clean; `/settings/platform-admins/trials`
+  compiles as a dynamic route.
+
+**On "show me the queue on the preview with both firms in it"**: I
+have no browser or Vercel access from this sandbox (same standing
+limitation as every prior PR this session), so I can't produce that
+screenshot myself. Two things instead:
+1. `db/seed.ts` now seeds two example abandoned-trial firms
+   ("Example Expired Trial Firm (Never Logged In)" / "(Went Quiet)")
+   specifically so this queue has something real to show on any
+   freshly seeded environment — local or a preview project — without
+   needing your actual customers' data. `createdAt` is deliberately
+   backdated so `trialEndsAt = createdAt + 7d` holds for these too,
+   same as `audit-trial-ends-at.ts` expects of every real trial firm.
+2. I don't know whether your Preview deployments currently share
+   production's database or point at the separate project from the
+   "preview-supabase-project" runbook — if they still share
+   production, NEMAR BUILDERS and Zhianna Sari-sari Store will simply
+   appear once this deploys, no seeding needed; if Preview is already
+   isolated, running `pnpm seed` against it (fresh, per that runbook's
+   own reset instructions) will populate the two example firms above
+   instead. Tell me which one it is and I can be more specific, but
+   either way the real logic behind what you'd see is the same thing
+   `pnpm test` just proved passing.
+
+Opened as a new PR, left unmerged, per standing instruction.

@@ -19,14 +19,17 @@ export const firms = pgTable("firms", {
   perClientAssignmentAllowed: boolean("per_client_assignment_allowed").notNull().default(true),
   // Only meaningful while plan = 'trial'. NULL for every other plan.
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
-  // Set once, the first time a lazy check (getCurrentUser(), see
-  // lib/auth/current-user.ts) notices trialEndsAt has passed while still
-  // on the trial plan — the platform admin dashboard's downgrade queue
-  // reads this, not trialEndsAt directly, so a trial that's merely
-  // "past its date" but not yet actually reviewed stays distinguishable
-  // from one that's been flagged. Cleared (set back to NULL) whenever a
-  // platform admin changes the firm's plan away from 'trial', so a later
-  // trial (if ever re-granted) starts clean.
+  // Historical marker only — set once, the first time a lazy check
+  // (getCurrentUser(), see lib/auth/current-user.ts) notices trialEndsAt
+  // has passed while still on the trial plan. NOT what determines
+  // whether a firm shows in the platform admin dashboard's expired-trial
+  // queue (listExpiredTrialFirms(), lib/data/platform-billing.ts reads
+  // trialEndsAt directly for that) — a firm that never logs back in
+  // after its trial ends would never trip this flag at all, which is
+  // exactly the case the queue most needs to catch. Kept around as a
+  // "when did we first notice" record and cleared (set back to NULL)
+  // whenever a platform admin changes the firm's plan away from
+  // 'trial', so a later trial (if ever re-granted) starts clean.
   trialExpiredFlaggedAt: timestamp("trial_expired_flagged_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
