@@ -8,12 +8,14 @@
  * a user's most recent legal_acceptances row against these exact values,
  * not just "has any row at all."
  *
- * Both documents are DRAFTS — see each page's own banner. Real version
- * numbers (e.g. "1.0") should replace these "-draft" values only once
- * legal review is complete and the content is actually final.
+ * When the next real revision (e.g. after a round of legal review) is
+ * ready to publish, update the page content, then bump the matching
+ * version string(s) here and LEGAL_EFFECTIVE_DATE together — that's the
+ * entire mechanism for making every existing user re-accept on their
+ * next login.
  */
-export const CURRENT_TERMS_VERSION = "0.1-draft";
-export const CURRENT_PRIVACY_VERSION = "0.1-draft";
+export const CURRENT_TERMS_VERSION = "1.0";
+export const CURRENT_PRIVACY_VERSION = "1.0";
 
-/** Shown on both pages next to the version number. Update when the draft content changes, even before it's final. */
-export const LEGAL_LAST_UPDATED = "2026-10-09";
+/** Shown on both pages next to the version number. Update together with whichever version constant(s) change. */
+export const LEGAL_EFFECTIVE_DATE = "October 9, 2026";

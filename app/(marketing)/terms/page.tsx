@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { LegalDocBanner } from "../legal-doc-banner";
-import { CURRENT_TERMS_VERSION, LEGAL_LAST_UPDATED } from "@/lib/legal/versions";
+import { CURRENT_TERMS_VERSION, LEGAL_EFFECTIVE_DATE } from "@/lib/legal/versions";
 
 export const metadata = {
   title: "Terms of Service — Keep.Books",
@@ -19,7 +18,9 @@ export default function TermsOfServicePage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Terms of Service</h1>
-      <LegalDocBanner version={CURRENT_TERMS_VERSION} lastUpdated={LEGAL_LAST_UPDATED} />
+      <p className="mt-2 text-sm text-slate-500">
+        Version {CURRENT_TERMS_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
+      </p>
 
       <H2>1. Acceptance</H2>
       <P>

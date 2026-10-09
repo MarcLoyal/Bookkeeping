@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { LegalDocBanner } from "../legal-doc-banner";
-import { CURRENT_PRIVACY_VERSION, LEGAL_LAST_UPDATED } from "@/lib/legal/versions";
+import { CURRENT_PRIVACY_VERSION, LEGAL_EFFECTIVE_DATE } from "@/lib/legal/versions";
 
 export const metadata = {
   title: "Privacy Policy — Keep.Books",
@@ -19,17 +18,17 @@ export default function PrivacyPolicyPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Privacy Policy</h1>
-      <LegalDocBanner version={CURRENT_PRIVACY_VERSION} lastUpdated={LEGAL_LAST_UPDATED} />
+      <p className="mt-2 text-sm text-slate-500">
+        Version {CURRENT_PRIVACY_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
+      </p>
 
       <H2>1. Who we are</H2>
       <P>
-        Keep.Books is a bookkeeping platform for Philippine accounting and bookkeeping firms. This policy is issued by Keep.Books. Our contact
-        email, and the contact for our Data Protection Officer, is{" "}
+        This policy is issued by Keep.Books, operated by Marc. Our contact email, and the contact for our Data Protection Officer, is{" "}
         <a href="mailto:mrcabanador@gmail.com" className="font-medium text-slate-900 hover:underline">
           mrcabanador@gmail.com
-        </a>{" "}
-        (Marc). Keep.Books is a small, early-stage operation at the time this policy is written — our registered business address will be added
-        here once finalized.
+        </a>
+        .
       </P>
 
       <H2>2. Our two roles</H2>
@@ -91,16 +90,16 @@ export default function PrivacyPolicyPage() {
           emails (such as password resets) on our behalf. Hosted in the <strong>ap-south-1 (Mumbai, India)</strong> AWS region.
         </li>
         <li>
-          <strong>Vercel</strong> — hosts and runs the Keep.Books application itself (the web pages and server logic you interact with). Hosting
-          region: [to confirm from Vercel project settings].
+          <strong>Vercel</strong> — hosts and runs the Keep.Books application itself (the web pages and server logic you interact with). Vercel
+          hosts the application on servers located outside the Philippines.
         </li>
         <li>
           <strong>Google</strong> — if you choose "Continue with Google," Google verifies your identity and shares your name and email with us;
           we never see or store your Google password.
         </li>
         <li>
-          <strong>Our email delivery provider</strong> — transactional emails (password resets, sign-up confirmations) are sent through the
-          outbound mail configuration set on our Supabase project: [provider to confirm].
+          <strong>Our email delivery provider</strong> — account emails, such as password resets, are sent through an email delivery service
+          located outside the Philippines.
         </li>
       </ul>
       <P>
@@ -155,7 +154,7 @@ export default function PrivacyPolicyPage() {
       <H2>10. Changes to this policy</H2>
       <P>
         We'll notify users by email and in the app before any material change to this policy takes effect, and this page will always show its
-        current version number and last-updated date at the top.
+        current version number and effective date at the top.
       </P>
 
       <p className="mt-10 text-sm text-slate-500">

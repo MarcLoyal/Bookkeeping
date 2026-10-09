@@ -5138,4 +5138,51 @@ version number and last-updated date shown at the top, per instruction
 — nothing here should be treated as legally final until that review
 happens and the version constants are bumped to a real release number.
 
+### Follow-up: published as version 1.0, draft banner removed
+
+You supplied the real values and asked for both pages to go live —
+important distinction from the previous attempt, which sent me
+bracketed *examples* of the expected format (`[e.g. iad1, Washington
+D.C.]`) rather than actual answers; I held off rather than publish
+fabricated specifics into a document that no longer says "draft," and
+asked again. This round's values were concrete, so:
+
+- `lib/legal/versions.ts`: `CURRENT_TERMS_VERSION` /
+  `CURRENT_PRIVACY_VERSION` bumped from `"0.1-draft"` to `"1.0"`;
+  `LEGAL_LAST_UPDATED` renamed `LEGAL_EFFECTIVE_DATE` = `"October 9,
+  2026"`. This rename+bump is the entire re-acceptance mechanism
+  working as designed — the next real revision (e.g. v1.1 after an
+  actual legal review) is published by changing these same values
+  again, nothing else, and `requireCurrentUser()`'s gate
+  (`hasAcceptedCurrentLegalTerms()`) will correctly stop matching
+  every existing user's current-version row the moment that happens.
+- Removed `app/(marketing)/legal-doc-banner.tsx` entirely (grepped
+  first — no other caller) and replaced its amber "Draft" box on both
+  pages with a plain `Version 1.0 · Effective October 9, 2026` line.
+- Privacy Policy Section 1: operator is now "Keep.Books, operated by
+  Marc," contact `mrcabanador@gmail.com` — the "registered business
+  address will be added here once finalized" sentence is gone, not
+  just hidden, per instruction to remove it outright rather than
+  leave a different placeholder in its place.
+- Section 5's Vercel and email-provider bullets replaced with your
+  exact supplied sentences verbatim ("Vercel hosts the application on
+  servers located outside the Philippines." /
+  "Account emails, such as password resets, are sent through an email
+  delivery service located outside the Philippines.") — deliberately
+  not naming a specific region or provider, since neither was actually
+  given.
+- Grepped both pages afterward for `[` and `confirm`/`TBD`/
+  `placeholder` — zero matches outside the legitimate, non-placeholder
+  use of the word "confirm" in the data-breach section ("once we
+  confirm a breach").
+
+**Verified**: `tsc --noEmit` clean, full suite **332/332** (unchanged
+— pure content edits, no logic touched), `pnpm build` clean —
+`/privacy` and `/terms` both still compile. Confirmed by direct grep
+that nothing else in the codebase still referenced
+`LEGAL_LAST_UPDATED`, `LegalDocBanner`, or the old `"0.1-draft"`
+string before committing.
+
+Still not merged — you asked to review the preview first.
+
 Opened as a new PR, left unmerged, per standing instruction.
