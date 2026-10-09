@@ -10,6 +10,9 @@ export type OnboardingActionState = { error: string | null };
 const onboardingSchema = z.object({
   firmName: z.string().min(1, "Firm name is required.").max(200),
   name: z.string().min(1, "Your name is required.").max(200),
+  // Same authoritative-check relationship to the checkbox's client-side
+  // `required` attribute as lib/auth/signup.ts's identical field.
+  acceptedTerms: z.literal("true", { errorMap: () => ({ message: "You must agree to the Terms of Service and Privacy Policy to continue." }) }),
 });
 
 export async function completeOnboardingAction(
@@ -27,6 +30,7 @@ export async function completeOnboardingAction(
   const parsed = onboardingSchema.safeParse({
     firmName: formData.get("firmName"),
     name: formData.get("name"),
+    acceptedTerms: formData.get("acceptedTerms"),
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid request." };

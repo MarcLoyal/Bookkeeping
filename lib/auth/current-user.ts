@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { withUserContext } from "@/db/client";
 import { users } from "@/db/schema";
 import { flagTrialExpiredIfNeeded } from "@/lib/billing/flag-expired-trials";
+import { hasAcceptedCurrentLegalTerms } from "@/lib/data/legal-acceptances";
 import { createSupabaseServerClient } from "./supabase-server";
 
 export type Role = "firm_admin" | "bookkeeper" | "reviewer" | "client_user" | "platform_admin" | "encoder" | "viewer";
@@ -77,7 +78,21 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
 export async function requireCurrentUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
-  if (user) return user;
+  if (user) {
+    // Gate every protected page on having accepted the CURRENT version of
+    // the Terms of Service / Privacy Policy — covers both a brand-new
+    // signup that somehow reached here without one (shouldn't happen,
+    // createFirmForUser() always records it) and, the actual point of
+    // this check, an existing user logging in after the version
+    // constants (lib/legal/versions.ts) were bumped. Deliberately not
+    // checked inside getCurrentUser() itself — app/accept-terms calls
+    // getCurrentUser() directly to render for a user who hasn't accepted
+    // yet, which would infinite-loop if this lived there instead.
+    if (!(await hasAcceptedCurrentLegalTerms(user.id))) {
+      redirect("/accept-terms");
+    }
+    return user;
+  }
 
   // A Google identity that authenticated but never finished naming a firm
   // (e.g. they closed the tab mid-onboarding) has a real Supabase session

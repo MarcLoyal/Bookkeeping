@@ -4984,3 +4984,205 @@ screenshot myself. Two things instead:
    `pnpm test` just proved passing.
 
 Opened as a new PR, left unmerged, per standing instruction.
+
+## Privacy Policy and Terms of Service, with versioned acceptance tracking
+
+Two new public pages (`/privacy`, `/terms`), a required consent checkbox
+at signup (both the email/password form and the Google "complete your
+firm" step), a gate that makes every existing user accept on their next
+login, and a permanent record of who accepted which version and when.
+
+**Research first, per instruction** — every factual claim below was
+checked against this codebase directly, not assumed from the outline:
+
+- **Every DB table**, read directly off `db/schema/*.ts`: account data
+  (`users`, `firms`), client records (`clients`, `client_tax_types`,
+  `contacts`, the transaction tables, `employees`/`payroll_runs`/
+  `payslips` on Premium), security/activity data (`audit_log`, Supabase
+  Auth's own sign-in records), and — confirmed by its absence — no
+  payment/billing table exists anywhere in this schema.
+- **Every outside service**, from `package.json`'s actual dependency
+  list plus a repo-wide grep for third-party SDKs/`fetch()` calls to
+  external hosts: Supabase (DB, Auth, Storage), Vercel (hosting),
+  Google (OAuth). `@aivangogh/ph-address` is a bundled static PSGC data
+  package, not a network service. No Stripe/PayMongo, no analytics, no
+  error tracking, nothing else.
+- **Firm isolation**: `app_current_firm_id()`-scoped RLS
+  (`db/sql/001_functions_triggers_rls.sql`), the same mechanism this
+  session's security incident investigation already verified end-to-end.
+- **Trial expiry / downgrade / plan changes**: read `flag-expired-
+  trials.ts`, `downgrade-firm-to-free.ts`, `set-firm-plan.ts`,
+  `plan-status-banner.tsx` directly — confirmed none of them ever
+  delete a client or user row (only `status`/`active` flips), and
+  nothing gates login or access on trial/plan state at all; the only
+  user-visible effect is the existing plan-status banner text.
+
+**What doesn't match the outline — flagged here, not silently written
+as fact:**
+
+1. **AI receipt extraction (Anthropic/Claude) is not a live
+   subprocessor today.** `lib/ai/extract-receipt.ts` exists, but
+   grepped for every caller: only its own test file calls it. No API
+   route, no UI, and `createSourceDocument()` doesn't even exist on
+   `main` (that PR — `claude/receipt-capture-ui` — never merged). No
+   user data is sent to Anthropic right now. Left out of the published
+   subprocessor list; the Privacy Policy will need a real update, not
+   just an edit, once that feature actually ships.
+2. **Vercel's hosting region can't be confirmed from this codebase** —
+   no `vercel.json`, no `regions` config, no `preferredRegion` export
+   anywhere. Left as an explicit `[to confirm]` placeholder in the
+   published text rather than guessed.
+3. **Supabase's region (ap-south-1, Mumbai) is confirmed**, but from
+   the real `DATABASE_URL` you pasted into chat during this session's
+   earlier incident investigation (`aws-0-ap-south-1.pooler.supabase.com`),
+   not from anything committed to this repo — env values are never
+   committed. Stated as fact in the policy on that basis.
+4. **The email provider can't be confirmed from code.** Nothing in
+   this repo calls an email-sending service directly — Supabase Auth
+   sends password-reset/confirmation emails through whatever SMTP is
+   configured on the Supabase project itself. A runbook
+   (`docs/runbooks/...resend...`) documents how to set up Resend there,
+   but it's a dashboard setting, not something a grep of this repo can
+   confirm was actually completed. Left as `[provider to confirm]`.
+5. **No payment processor exists in code at all** — confirmed, not a
+   discrepancy: the outline's own wording ("through the payment
+   methods we invoice") already matches reality. All billing is
+   manual/offline; there's no checkout, no payment table, nothing.
+6. **Backup frequency/retention can't be confirmed** — depends on the
+   Supabase subscription tier, which isn't something this codebase
+   states. Written generically ("regular backups") rather than
+   inventing a schedule.
+7. **Fair-use Section 5 (TIN/branch client grouping, one workspace per
+   firm) is not technically enforced.** `enforce_client_plan_limit()`
+   (`018_plan_limits.sql`) counts active `clients` rows directly — it
+   has no concept of TIN, and nothing merges same-TIN rows into "one
+   client" or detects a firm running more than one workspace. Kept the
+   clause in the draft as stated policy (a ToS can state an honor-system
+   rule), but the page itself says plainly that plan limits are enforced
+   by row count and this section is reviewed manually, not automatically
+   — rather than implying enforcement that doesn't exist.
+8. **No self-serve "export all data" or "close my account" feature
+   exists.** Individual books/reports can be exported today (the
+   existing PDF/Excel export per report), but there's no single
+   "export everything" action and no account-closure button — grepped
+   for both, found neither. The Privacy Policy's Retention section
+   states this directly: fulfilling the 30-day export / 60-day
+   deletion commitment today is a manual process on our side, not an
+   automated product feature.
+
+**Schema**: new `legal_acceptances` table (`db/schema/legal_
+acceptances.ts`) — `userId`, `termsVersion`, `privacyVersion`,
+`acceptedAt`. Append-only, one row per acceptance event, same
+immutability reasoning as `audit_log` (no UPDATE/DELETE policy exists
+for either). RLS (`db/sql/024_legal_acceptances_rls.sql`): a user can
+SELECT/INSERT only their own rows. No explicit `GRANT` needed — PR
+#49's fix earlier this session (`db/migrate.ts` re-running `GRANT ...
+ON ALL TABLES` unconditionally) already covers a brand-new table
+automatically; confirmed live by running `pnpm db:migrate` locally and
+watching it apply.
+
+**Versioning**: `lib/legal/versions.ts` exports
+`CURRENT_TERMS_VERSION`/`CURRENT_PRIVACY_VERSION` (both `"0.1-draft"`
+right now) and `LEGAL_LAST_UPDATED`. Everything — the pages' own
+banner, the signup/onboarding checkbox validation, and the
+re-acceptance gate — reads these two constants, not a hardcoded
+string, so bumping either one is the entire mechanism for re-prompting
+every existing user the next time this content is genuinely finalized.
+
+**New signups**: `createFirmForUser()` (shared by both the email/
+password and Google signup paths) now unconditionally inserts a
+`legal_acceptances` row in the same transaction as the firm/user rows
+— not a conditional branch, since both callers' own Zod schemas
+(`signupSchema` in `lib/auth/signup.ts`, `onboardingSchema` in
+`app/onboarding/firm/actions.ts`) already require
+`acceptedTerms === "true"` before either one is ever reached. A shared
+`<LegalConsentCheckbox>` component (linking inline to `/terms` and
+`/privacy`, opened in a new tab so filling the form isn't lost) is
+used on both the email signup form and the Google onboarding form —
+Google's "Continue with Google" button itself doesn't need the
+checkbox, since no account is actually created until the onboarding
+form step (confirmed via `create-firm-for-user.ts`'s own doc comment).
+
+**Existing users**: `requireCurrentUser()` (`lib/auth/current-user.ts`)
+— the one function every protected page already calls — now checks
+`hasAcceptedCurrentLegalTerms(user.id)` right after resolving the
+session, and redirects to a new `/accept-terms` page if it's false.
+That page deliberately calls `getCurrentUser()` directly, not
+`requireCurrentUser()`, which would infinite-loop. Confirmed directly
+against a real pre-existing row: the seeded `admin@keepbooks.demo`
+account (created long before this feature existed) has zero
+`legal_acceptances` rows right now, so it would correctly be sent to
+`/accept-terms` on its next login.
+
+**Verified for real** (local Postgres was available again this
+session): `pnpm db:generate` + `pnpm db:migrate` — new table created,
+RLS applied, the PR #49 grant-fix ran automatically. New test file
+`db/__tests__/legal-acceptances.test.ts` (7 tests): `hasAcceptedCurrentLegalTerms()`
+correctly distinguishes "no row" from "a row for a different version"
+from "a row for the current version"; RLS blocks reading or inserting
+another user's acceptance row; `createFirmForUser()` is proven to
+write the acceptance row in the same call, for the exact current
+version strings. (One real mistake caught while writing this file: a
+UUID prefix I picked, `9800-...`, collided with an existing test
+file's own fixture firm — `onConflictDoNothing()` silently masked it
+on the shared firm row, then a later `DELETE` hit that other test's
+real client/journal_entry data and failed on a foreign key. Moved to
+an unclaimed `9a00-...` prefix and reproduced a clean pass.) Full
+suite: **332/332**, run twice back to back to confirm re-run safety
+against this persistent local DB. `tsc --noEmit` and `pnpm build` both
+clean — `/privacy`, `/terms`, `/accept-terms` all compile and appear
+in the route list.
+
+Both pages are marked "Draft — pending legal review" with their
+version number and last-updated date shown at the top, per instruction
+— nothing here should be treated as legally final until that review
+happens and the version constants are bumped to a real release number.
+
+### Follow-up: published as version 1.0, draft banner removed
+
+You supplied the real values and asked for both pages to go live —
+important distinction from the previous attempt, which sent me
+bracketed *examples* of the expected format (`[e.g. iad1, Washington
+D.C.]`) rather than actual answers; I held off rather than publish
+fabricated specifics into a document that no longer says "draft," and
+asked again. This round's values were concrete, so:
+
+- `lib/legal/versions.ts`: `CURRENT_TERMS_VERSION` /
+  `CURRENT_PRIVACY_VERSION` bumped from `"0.1-draft"` to `"1.0"`;
+  `LEGAL_LAST_UPDATED` renamed `LEGAL_EFFECTIVE_DATE` = `"October 9,
+  2026"`. This rename+bump is the entire re-acceptance mechanism
+  working as designed — the next real revision (e.g. v1.1 after an
+  actual legal review) is published by changing these same values
+  again, nothing else, and `requireCurrentUser()`'s gate
+  (`hasAcceptedCurrentLegalTerms()`) will correctly stop matching
+  every existing user's current-version row the moment that happens.
+- Removed `app/(marketing)/legal-doc-banner.tsx` entirely (grepped
+  first — no other caller) and replaced its amber "Draft" box on both
+  pages with a plain `Version 1.0 · Effective October 9, 2026` line.
+- Privacy Policy Section 1: operator is now "Keep.Books, operated by
+  Marc," contact `mrcabanador@gmail.com` — the "registered business
+  address will be added here once finalized" sentence is gone, not
+  just hidden, per instruction to remove it outright rather than
+  leave a different placeholder in its place.
+- Section 5's Vercel and email-provider bullets replaced with your
+  exact supplied sentences verbatim ("Vercel hosts the application on
+  servers located outside the Philippines." /
+  "Account emails, such as password resets, are sent through an email
+  delivery service located outside the Philippines.") — deliberately
+  not naming a specific region or provider, since neither was actually
+  given.
+- Grepped both pages afterward for `[` and `confirm`/`TBD`/
+  `placeholder` — zero matches outside the legitimate, non-placeholder
+  use of the word "confirm" in the data-breach section ("once we
+  confirm a breach").
+
+**Verified**: `tsc --noEmit` clean, full suite **332/332** (unchanged
+— pure content edits, no logic touched), `pnpm build` clean —
+`/privacy` and `/terms` both still compile. Confirmed by direct grep
+that nothing else in the codebase still referenced
+`LEGAL_LAST_UPDATED`, `LegalDocBanner`, or the old `"0.1-draft"`
+string before committing.
+
+Still not merged — you asked to review the preview first.
+
+Opened as a new PR, left unmerged, per standing instruction.

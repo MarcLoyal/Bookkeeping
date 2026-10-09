@@ -19,6 +19,7 @@
     "delete-test-signup": "tsx scripts/delete-test-signup.ts",
     "downgrade-firm": "tsx scripts/downgrade-firm-to-free.ts",
     "audit-trial-ends-at": "tsx scripts/audit-trial-ends-at.ts",
+    "check-legal-acceptances-access": "tsx scripts/check-legal-acceptances-access.ts",
     "test-receipt-extraction": "tsx scripts/test-receipt-extraction.ts",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
