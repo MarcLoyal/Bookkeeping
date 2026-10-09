@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { LegalConsentCheckbox } from "@/components/auth/legal-consent-checkbox";
 import { completeOnboardingAction, type OnboardingActionState } from "./actions";
 
 const initialState: OnboardingActionState = { error: null };
@@ -38,6 +39,7 @@ export function OnboardingForm({ defaultName }: { defaultName: string }) {
           className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
         />
       </div>
+      <LegalConsentCheckbox />
       {state.error && <p className="text-sm text-red-600">{state.error}</p>}
       <button
         type="submit"

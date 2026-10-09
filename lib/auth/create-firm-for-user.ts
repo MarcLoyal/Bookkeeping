@@ -1,7 +1,8 @@
 import "server-only";
 import { authDb } from "@/db/authClient";
-import { auditLog, firms, users } from "@/db/schema";
+import { auditLog, firms, legalAcceptances, users } from "@/db/schema";
 import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
+import { CURRENT_PRIVACY_VERSION, CURRENT_TERMS_VERSION } from "@/lib/legal/versions";
 
 /**
  * Creates a new firm and its first user (role firm_admin) in one
@@ -16,6 +17,15 @@ import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
  * a brand-new identity (app/onboarding/firm, where Supabase Auth already
  * created the user during the OAuth callback and this just needs a firm
  * name to finish the profile).
+ *
+ * Unconditionally records a legal_acceptances row for the current Terms/
+ * Privacy version alongside the firm and user — there's no separate
+ * "accepted" flag on this function's input because both callers' own
+ * form schemas (signupSchema in lib/auth/signup.ts,
+ * onboardingSchema in app/onboarding/firm/actions.ts) already require
+ * the consent checkbox to be checked before this function is ever
+ * reached; by the time either caller gets here, consent is a precondition,
+ * not something left to re-check.
  */
 export async function createFirmForUser(input: {
   userId: string;
@@ -38,6 +48,11 @@ export async function createFirmForUser(input: {
       name,
       role: "firm_admin",
       signupMethod,
+    });
+    await tx.insert(legalAcceptances).values({
+      userId,
+      termsVersion: CURRENT_TERMS_VERSION,
+      privacyVersion: CURRENT_PRIVACY_VERSION,
     });
     await tx.insert(auditLog).values({ actorUserId: userId, action: "SIGNUP", tableName: "firms", recordId: firm.id });
     return firm;

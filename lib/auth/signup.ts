@@ -24,6 +24,10 @@ export const signupSchema = z
       .regex(UPPERCASE_RE, "Password must include at least one uppercase letter.")
       .regex(SPECIAL_CHAR_RE, "Password must include at least one special character."),
     confirmPassword: z.string(),
+    // The checkbox's own `required` attribute is client-side only — this
+    // is the authoritative check, same relationship as PASSWORD_MIN_LENGTH
+    // above to signup-form.tsx's password pattern hint.
+    acceptedTerms: z.literal("true", { errorMap: () => ({ message: "You must agree to the Terms of Service and Privacy Policy to continue." }) }),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords do not match.",

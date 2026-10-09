@@ -58,6 +58,12 @@ export default async function MarketingLayout({ children }: { children: React.Re
             <Link href="/faq" className="hover:text-slate-900">
               FAQ
             </Link>
+            <Link href="/terms" className="hover:text-slate-900">
+              Terms
+            </Link>
+            <Link href="/privacy" className="hover:text-slate-900">
+              Privacy
+            </Link>
             {user ? (
               <Link href="/dashboard" prefetch={false} className="hover:text-slate-900">
                 Go to Dashboard

@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
+import { LegalConsentCheckbox } from "@/components/auth/legal-consent-checkbox";
 import { signupAction, type SignupActionState } from "./actions";
 
 const initialState: SignupActionState = { error: null, needsEmailConfirmation: false };
@@ -98,6 +99,7 @@ export function SignupForm() {
             className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
           />
         </div>
+        <LegalConsentCheckbox />
         {state.error && <p className="text-sm text-red-600">{state.error}</p>}
         <button
           type="submit"
