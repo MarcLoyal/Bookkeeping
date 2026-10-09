@@ -16,6 +16,15 @@ import { firms } from "@/db/schema";
  * admin action, per explicit instruction: watch it run correctly a few
  * times before making day 8 do it automatically.
  *
+ * NOT what the platform admin dashboard's expired-trial queue depends on
+ * — listExpiredTrialFirms() (lib/data/platform-billing.ts) checks
+ * trialEndsAt directly, specifically because this function only ever
+ * runs when someone from the firm is actively logging in, so a firm that
+ * signs up and never returns would never trip it. This function still
+ * exists purely to leave a "first noticed" timestamp on the row
+ * (trialExpiredFlaggedAt) for anyone who finds it useful later, not as a
+ * gate anything currently depends on.
+ *
  * Runs on the RLS-bypassing authDb connection — firms has no UPDATE
  * policy for any firm-scoped role at all (only firms_select exists), so
  * this could never succeed through the normal per-request connection.

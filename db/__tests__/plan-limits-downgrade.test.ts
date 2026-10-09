@@ -6,6 +6,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local" });
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -382,9 +384,20 @@ describe("extendFirmTrial()", () => {
 describe("listExpiredTrialFirms()", () => {
   const FLAGGED_FIRM_ID = "00000000-0000-4000-aa00-000000000090";
   const FLAGGED_OWNER_ID = "00000000-0000-4000-aa00-000000000091";
-  const NOT_YET_FLAGGED_FIRM_ID = "00000000-0000-4000-aa00-000000000092";
-  const NOT_YET_FLAGGED_OWNER_ID = "00000000-0000-4000-aa00-000000000093";
-  const OLDER_FLAG_FIRM_ID = "00000000-0000-4000-aa00-000000000094";
+  const NOT_YET_EXPIRED_FIRM_ID = "00000000-0000-4000-aa00-000000000092";
+  const NOT_YET_EXPIRED_OWNER_ID = "00000000-0000-4000-aa00-000000000093";
+  const OLDER_EXPIRY_FIRM_ID = "00000000-0000-4000-aa00-000000000094";
+  // The exact case this fix exists for: expired, but nobody from the firm
+  // ever logged back in to trip flagTrialExpiredIfNeeded() — flag stays
+  // NULL forever under the old behavior, which is precisely why the
+  // queue can no longer depend on it.
+  const ABANDONED_FIRM_ID = "00000000-0000-4000-aa00-000000000095";
+  const ABANDONED_OWNER_ID = "00000000-0000-4000-aa00-000000000096";
+  // Shouldn't arise via any real app code path (both setFirmPlan() and
+  // downgradeFirmToFree() null out trialEndsAt whenever plan leaves
+  // 'trial'), but directly verifies the query's plan = 'trial' filter
+  // rather than trusting that combination can never occur.
+  const NON_TRIAL_WITH_PAST_DATE_FIRM_ID = "00000000-0000-4000-aa00-000000000097";
 
   beforeAll(async () => {
     await upsertFirm(FLAGGED_FIRM_ID, "Listed Expired Firm", {
@@ -392,14 +405,24 @@ describe("listExpiredTrialFirms()", () => {
       trialEndsAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
       trialExpiredFlaggedAt: new Date(Date.now() - 1000),
     });
-    await upsertFirm(OLDER_FLAG_FIRM_ID, "Older-Flagged Firm", {
+    await upsertFirm(OLDER_EXPIRY_FIRM_ID, "Older-Expired Firm", {
       plan: "trial",
       trialEndsAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
       trialExpiredFlaggedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
     });
-    await upsertFirm(NOT_YET_FLAGGED_FIRM_ID, "Not-Yet-Flagged Firm", {
+    await upsertFirm(NOT_YET_EXPIRED_FIRM_ID, "Not-Yet-Expired Firm", {
       plan: "trial",
       trialEndsAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+    await upsertFirm(ABANDONED_FIRM_ID, "Abandoned Trial Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+    await upsertFirm(NON_TRIAL_WITH_PAST_DATE_FIRM_ID, "Non-Trial, Stale Date Firm", {
+      plan: "free",
+      trialEndsAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
       trialExpiredFlaggedAt: null,
     });
 
@@ -417,26 +440,50 @@ describe("listExpiredTrialFirms()", () => {
     await ownerDb
       .insert(schema.users)
       .values({
-        id: NOT_YET_FLAGGED_OWNER_ID,
-        firmId: NOT_YET_FLAGGED_FIRM_ID,
-        email: "not-yet-flagged-owner@test.local",
-        name: "Not Flagged Owner",
+        id: NOT_YET_EXPIRED_OWNER_ID,
+        firmId: NOT_YET_EXPIRED_FIRM_ID,
+        email: "not-yet-expired-owner@test.local",
+        name: "Not Expired Owner",
         role: "firm_admin",
         active: true,
       })
-      .onConflictDoUpdate({ target: schema.users.id, set: { firmId: NOT_YET_FLAGGED_FIRM_ID } });
+      .onConflictDoUpdate({ target: schema.users.id, set: { firmId: NOT_YET_EXPIRED_FIRM_ID } });
+    await ownerDb
+      .insert(schema.users)
+      .values({
+        id: ABANDONED_OWNER_ID,
+        firmId: ABANDONED_FIRM_ID,
+        email: "abandoned-owner@test.local",
+        name: "Abandoned Owner",
+        role: "firm_admin",
+        active: true,
+      })
+      .onConflictDoUpdate({ target: schema.users.id, set: { firmId: ABANDONED_FIRM_ID } });
   });
 
-  it("only lists firms with trialExpiredFlaggedAt set, oldest flag first", async () => {
+  it("lists every expired trial firm by date, including one never flagged, oldest-expired first", async () => {
     const rows = await listExpiredTrialFirms(PLATFORM_ADMIN_ID);
     const ids = rows.map((r) => r.id);
-    expect(ids).not.toContain(NOT_YET_FLAGGED_FIRM_ID);
+    expect(ids).not.toContain(NOT_YET_EXPIRED_FIRM_ID);
+    expect(ids).not.toContain(NON_TRIAL_WITH_PAST_DATE_FIRM_ID);
     expect(ids).toContain(FLAGGED_FIRM_ID);
-    expect(ids).toContain(OLDER_FLAG_FIRM_ID);
+    expect(ids).toContain(OLDER_EXPIRY_FIRM_ID);
+    // The whole point of this fix: a firm with a NULL flag still shows up
+    // here purely because its trialEndsAt has passed.
+    expect(ids).toContain(ABANDONED_FIRM_ID);
 
-    const olderIndex = ids.indexOf(OLDER_FLAG_FIRM_ID);
+    const olderIndex = ids.indexOf(OLDER_EXPIRY_FIRM_ID);
+    const abandonedIndex = ids.indexOf(ABANDONED_FIRM_ID);
     const newerIndex = ids.indexOf(FLAGGED_FIRM_ID);
-    expect(olderIndex).toBeLessThan(newerIndex);
+    expect(olderIndex).toBeLessThan(abandonedIndex);
+    expect(abandonedIndex).toBeLessThan(newerIndex);
+  });
+
+  it("returns each row's trialEndsAt, not trialExpiredFlaggedAt", async () => {
+    const rows = await listExpiredTrialFirms(PLATFORM_ADMIN_ID);
+    const row = rows.find((r) => r.id === ABANDONED_FIRM_ID);
+    expect(row?.trialEndsAt).toBeInstanceOf(Date);
+    expect(row && row.trialEndsAt.getTime()).toBeLessThan(Date.now());
   });
 
   it("joins each firm to its owner's name/email", async () => {
@@ -444,5 +491,56 @@ describe("listExpiredTrialFirms()", () => {
     const row = rows.find((r) => r.id === FLAGGED_FIRM_ID);
     expect(row?.ownerName).toBe("Listed Owner");
     expect(row?.ownerEmail).toBe("listed-expired-owner@test.local");
+  });
+});
+
+describe("023_backfill_trial_expired_flag.sql", () => {
+  const TO_BACKFILL_ID = "00000000-0000-4000-aa00-000000000098";
+  const ALREADY_FLAGGED_ID = "00000000-0000-4000-aa00-000000000099";
+  const NOT_EXPIRED_ID = "00000000-0000-4000-aa00-0000000000a0";
+  const NON_TRIAL_ID = "00000000-0000-4000-aa00-0000000000a1";
+
+  it("backfills only trial firms past their end date with no existing flag, leaving every other case untouched", async () => {
+    await upsertFirm(TO_BACKFILL_ID, "Backfill Target Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+    await upsertFirm(ALREADY_FLAGGED_ID, "Already Flagged Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    });
+    await upsertFirm(NOT_EXPIRED_ID, "Not Yet Expired Firm", {
+      plan: "trial",
+      trialEndsAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+    await upsertFirm(NON_TRIAL_ID, "Non-Trial Firm", {
+      plan: "free",
+      trialEndsAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      trialExpiredFlaggedAt: null,
+    });
+
+    const [alreadyFlagged] = await ownerDb.select().from(schema.firms).where(eq(schema.firms.id, ALREADY_FLAGGED_ID));
+    const originalFlagTime = alreadyFlagged.trialExpiredFlaggedAt!.getTime();
+
+    // Run the migration file's exact SQL text, not a re-typed copy — this
+    // proves what actually ships, not just what this test thinks it says.
+    const sqlText = readFileSync(path.join(__dirname, "..", "sql", "023_backfill_trial_expired_flag.sql"), "utf-8");
+    await ownerConn.unsafe(sqlText);
+
+    const rows = await ownerDb
+      .select()
+      .from(schema.firms)
+      .where(sql`${schema.firms.id} in (${TO_BACKFILL_ID}, ${ALREADY_FLAGGED_ID}, ${NOT_EXPIRED_ID}, ${NON_TRIAL_ID})`);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    expect(byId.get(TO_BACKFILL_ID)?.trialExpiredFlaggedAt).not.toBeNull();
+    // Re-running is a no-op on an already-flagged row — the WHERE clause's
+    // own IS NULL check, not just coincidence.
+    expect(byId.get(ALREADY_FLAGGED_ID)?.trialExpiredFlaggedAt?.getTime()).toBe(originalFlagTime);
+    expect(byId.get(NOT_EXPIRED_ID)?.trialExpiredFlaggedAt).toBeNull();
+    expect(byId.get(NON_TRIAL_ID)?.trialExpiredFlaggedAt).toBeNull();
   });
 });

@@ -242,6 +242,31 @@ async function main() {
     postedBy: admin.id,
   });
 
+  // Two example abandoned-trial firms — exist purely so the platform
+  // admin dashboard's expired-trial queue (/settings/platform-admins/
+  // trials) has something real to show on a freshly seeded environment,
+  // demonstrating the exact scenario listExpiredTrialFirms() now has to
+  // catch: a trial whose 7-day clock ran out with nobody from the firm
+  // ever logging back in to trip the old flag-based check. createdAt is
+  // backdated (not left at its now() default) so trialEndsAt = createdAt
+  // + 7 days holds true here too, same as scripts/audit-trial-ends-at.ts
+  // expects of every real trial firm. No clients/users beyond the one
+  // owner each — these only need to exist, not be used.
+  console.log("Seeding 2 example abandoned-trial firms for the expired-trial queue...");
+  const SEVENTEEN_DAYS_AGO = new Date(Date.now() - 17 * 24 * 60 * 60 * 1000);
+  const TEN_DAYS_AGO = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  const abandonedTrialFirms = [
+    { firmName: "Example Expired Trial Firm (Never Logged In)", ownerName: "Pat Owner", ownerEmail: "owner-never-active@keepbooks.demo" },
+    { firmName: "Example Expired Trial Firm (Went Quiet)", ownerName: "Jo Owner", ownerEmail: "owner-went-quiet@keepbooks.demo" },
+  ];
+  for (const { firmName, ownerName, ownerEmail } of abandonedTrialFirms) {
+    const [exampleFirm] = await db
+      .insert(firms)
+      .values({ name: firmName, plan: "trial", trialEndsAt: TEN_DAYS_AGO, createdAt: SEVENTEEN_DAYS_AGO })
+      .returning();
+    await db.insert(users).values({ id: crypto.randomUUID(), firmId: exampleFirm.id, email: ownerEmail, name: ownerName, role: "firm_admin" });
+  }
+
   console.log("\nSeed complete.\n");
   console.log("Demo logins (password: password123):");
   console.log(`  firm_admin  -> ${admin.email}`);
