@@ -38,11 +38,12 @@ import { PLAN_DEFAULTS, TRIAL_DURATION_DAYS } from "@/lib/billing/plan-limits";
  * DECISIONS.md's "Pricing content update: Custom plan rename, transaction
  * allowances, annual bonus" entry.
  *
- * Still says nothing about AI receipt capture, same as PR #44's original
- * reasoning: that feature's UI (claude/receipt-capture-ui, PR #43) is still
- * unmerged, and advertising a feature that isn't live in production yet
- * would be worse than leaving it out until it ships. Add it back in once
- * #43 merges.
+ * AI receipt capture is listed on the Custom tier only, explicitly marked
+ * "Coming soon" — the backend extraction code exists (lib/ai/extract-receipt.ts)
+ * but nothing in the app calls it yet, so it must never read as a live
+ * feature. Keep this label in sync with the matching "Coming soon" feature
+ * card on the Home page (app/(marketing)/page.tsx) — both describe the
+ * same not-yet-shipped feature and should say the same thing.
  */
 
 export type PricingTierId = "basic" | "premium" | "enterprise";
@@ -73,7 +74,7 @@ export type PricingTier = {
 export const TRIAL_OFFER = {
   days: TRIAL_DURATION_DAYS,
   maxClients: PLAN_DEFAULTS.trial.maxClients,
-  description: `Full system access for ${TRIAL_DURATION_DAYS} days, no credit card required — manage up to ${PLAN_DEFAULTS.trial.maxClients} clients and try every feature before you commit.`,
+  description: `Full system access for ${TRIAL_DURATION_DAYS} days — manage up to ${PLAN_DEFAULTS.trial.maxClients} clients and try every feature before you commit.`,
 };
 
 /** PLACEHOLDER discount — finalize with a real number before launch. */
@@ -162,7 +163,13 @@ export const PRICING_TIERS: PricingTier[] = [
     clientsIncluded: "Custom — sized to your firm",
     subUserSeats: "Custom user seats",
     perClientAssignment: true,
-    features: ["Everything in Premium", "Custom client and user limits", "Dedicated onboarding", "Priority support with a named contact"],
+    features: [
+      "Everything in Premium",
+      "Custom client and user limits",
+      "Dedicated onboarding",
+      "Priority support with a named contact",
+      "AI receipt capture — Coming soon",
+    ],
     ctaLabel: "Contact us",
   },
 ];

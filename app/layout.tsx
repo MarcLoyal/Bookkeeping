@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { getSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(getSiteUrl()),
   title: "Keep.Books",
   description: "Bookkeeping-services platform for the Philippine market",
 };
