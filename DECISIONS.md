@@ -5186,3 +5186,118 @@ string before committing.
 Still not merged — you asked to review the preview first.
 
 Opened as a new PR, left unmerged, per standing instruction.
+
+## Public marketing website (Home, Features, Security & Privacy, FAQ, Contact)
+
+Built a full public marketing site to replace the old `app/page.tsx`
+(which just redirected `/` straight to `/login` or `/dashboard` — no
+marketing presence existed before this). Scope: Home, Features,
+Security & Privacy, Contact, routing changes, and SEO basics, in one
+unmerged PR. No app or login logic touched — confirmed by diff before
+committing.
+
+**Research first, copy approved before building.** Before writing any
+page, delegated a full research pass over the actual codebase (design
+tokens, existing marketing pages' tone, plan/billing config, which
+features are really implemented vs. aspirational, the real RLS/role/
+audit-trail security model, platform-admin visibility limits) and sent
+proposed Home page headlines/section copy for approval before touching
+code, per instruction. Two discrepancies surfaced and were resolved
+before building:
+
+- **AI receipt capture has no reachable UI anywhere in the product**
+  (`lib/ai/extract-receipt.ts` exists; nothing calls it — confirmed
+  independently of this session's own earlier finding on the same
+  question for the Privacy Policy PR). Resolved: labeled
+  "Coming soon · Custom plan" everywhere it appears — the Home feature
+  card (dashed border, muted text, amber clock badge), the Features
+  page module (same treatment), and the Custom tier's own feature list
+  on `/pricing` (added a non-checkmark `Clock` icon + italic style so
+  it reads distinctly from included features, not just as plain text).
+- **The requested final-CTA copy ("...with 3 clients included") didn't
+  match the code** — 3 is the ongoing Free plan's limit;
+  `TRIAL_OFFER.maxClients` (the actual 7-day trial) is 10. Resolved:
+  final CTA now reads "Try it free for 7 days, with up to 10 clients
+  included," pulled from `TRIAL_OFFER` directly rather than hardcoded,
+  so it can't drift from `/pricing`'s own number again.
+
+Also removed "no credit card required" everywhere it appeared
+(`lib/marketing/pricing-config.ts`'s `TRIAL_OFFER.description` and
+`/pricing`'s closing line) — you're planning automated payments and
+didn't want that claim live anywhere.
+
+**Routing**: `app/page.tsx` (the old redirect) deleted;
+`app/(marketing)/page.tsx` is now `/`, wrapped by the same
+`(marketing)/layout.tsx` shell as Pricing/FAQ/Terms/Privacy. Added
+`/features`, `/security`, `/contact` (new pages) and `/`,
+`/sitemap.xml`, `/robots.txt`, `/icon`, `/opengraph-image` to
+`middleware.ts`'s `PUBLIC_PATHS` — the last two were missed on first
+pass and came back `307` to `/login` for signed-out visitors (caught
+live in a Playwright smoke test, not by `tsc`/`pnpm test`, since
+middleware auth-gating isn't exercised by either). Login, signup, and
+every existing bookmark verified unaffected — same routes, same
+components, not touched.
+
+**"No database calls on marketing pages"**: the pre-existing
+`(marketing)/layout.tsx` (serving Pricing/FAQ/Terms/Privacy already)
+called `getCurrentUser()` for its nav state, which runs a real
+Postgres query via `withUserContext` plus a trial-expiry check on
+every request — directly conflicting with this task's explicit
+performance requirement, and now serving the much higher-volume
+anonymous ad/referral traffic landing on `/`. Added
+`lib/auth/is-authenticated.ts` — `supabase.auth.getUser()` only, no
+Postgres query — and switched the shared marketing layout to it. Loses
+nothing for the nav's purposes (still a real, server-verified
+signed-in check, not a stale cookie read); the one traded-off edge
+case is a deactivated account briefly seeing "Go to Dashboard" instead
+of "Log in" until they click through, where `requireCurrentUser()`'s
+real check still catches it. This is a behavior change to code from an
+already-merged PR, done in service of this task's own stated
+requirement — flagged here rather than silently folded in.
+
+**Dashboard screenshot**: this sandbox has no real Supabase project
+(same limitation noted in the Privacy Policy PR's session), so an
+actual live screenshot of the authenticated dashboard could not be
+captured here. Built `app/(marketing)/dashboard-preview.tsx` instead —
+a static illustration using the real dashboard's exact card/accent-
+color styling, with clearly fictitious, labeled demo data and its own
+"Demo data" badge, never presented as a real screenshot. Swapping in
+an actual screenshot later is a one-file change.
+
+**SEO basics**: `app/sitemap.ts` / `app/robots.ts` (Next's native
+`MetadataRoute` file conventions, confirmed against this pinned Next
+version's own bundled docs per `AGENTS.md` before writing either —
+neither existed before), `app/opengraph-image.tsx` and `app/icon.tsx`
+(dynamic `ImageResponse`-generated, since no static brand asset
+existed to use either), and `metadataBase` added to the root layout.
+All four read a new `lib/site-url.ts` helper — same `process.env.APP_URL
+|| "http://localhost:3000"` pattern already duplicated in
+`lib/auth/password-reset.ts` and `lib/auth/create-team-member.ts` for
+the identical "need an absolute URL outside the request" problem, not
+a new convention.
+
+**Caught by the repo's own acceptance test, not by `tsc`**: the OG
+image's `rgba(255,255,255,0.12)` background matched
+`db/__tests__/acceptance.test.ts`'s acceptance #9 grep for hardcoded
+VAT-rate literals (`0\.12|12%|1\.12`) across `app`/`lib`/`db` — a false
+positive (opacity value, nothing to do with VAT), fixed by changing
+the opacity to `0.1`.
+
+**Verified**: `tsc --noEmit` clean; `pnpm build` clean, all new routes
+present in the route manifest with `/icon`, `/opengraph-image`,
+`/robots.txt`, `/sitemap.xml` correctly static and `/` correctly
+dynamic (per-request auth check); full suite **332/332**, run twice.
+Ran the actual dev server against a freshly migrated+seeded local
+sandbox database and smoke-tested every new/changed route's HTTP
+status, then Playwright-screenshotted Home (desktop + mobile), Features,
+Security, Pricing, Contact, and Login at real viewport sizes — caught
+and fixed the `/icon`+`/opengraph-image` middleware gap and a mobile
+header where "Log in" was accidentally hidden (`sm:inline`) this way,
+not from a before/after description. Could not test the authenticated
+"Go to Dashboard" nav state end-to-end (no real Supabase project in
+this sandbox) — the code path is structurally identical to the
+pattern `(marketing)/layout.tsx` already used for this exact
+conditional before this change, just backed by a cheaper check.
+
+Opened as a new PR, left unmerged, per instruction, for preview
+review before merge.

@@ -51,3 +51,17 @@ export const FAQ_ITEMS: FaqItem[] = [
       "Yes, anytime. Reach out to us when you're ready to change plans and we'll switch you over — upgrades take effect right away. A self-serve upgrade/downgrade option inside your dashboard is on our roadmap. Downgrading to a plan with lower client or seat limits may mean some clients or team members become read-only or paused until you're back within the new plan's limits, but nothing is ever deleted in the process.",
   },
 ];
+
+/**
+ * The 5 FAQ_ITEMS shown directly on the Home page, in this order, ahead of
+ * a link to the full FAQ page — kept as an explicit list of question
+ * strings (not array indices) so reordering FAQ_ITEMS above can't
+ * silently change which answers Home shows.
+ */
+export const HOME_FAQ_QUESTIONS: string[] = [
+  "Is my clients' financial data safe and confidential?",
+  "Who can see my files — can the Keep.Books admin/platform owner view my clients' data?",
+  "What happens after my 7-day trial ends?",
+  "What's the difference between Basic, Premium, and Custom?",
+  "Can I add team members (e.g. an encoder who only enters data vs. a viewer) to my account?",
+];

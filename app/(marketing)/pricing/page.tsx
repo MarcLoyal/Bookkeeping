@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Check } from "lucide-react";
+import { Check, Clock } from "lucide-react";
 import {
   ANNUAL_BONUS_OFFER,
   BILLING_CADENCE_NOTE,
@@ -69,12 +69,19 @@ function TierCard({ tier }: { tier: PricingTier }) {
       {tier.addOnLine && <p className="mt-5 rounded-md bg-slate-50 p-3 text-sm text-slate-600">{tier.addOnLine}</p>}
 
       <ul className="mt-5 flex-1 space-y-2.5 text-sm text-slate-600">
-        {tier.features.map((feature) => (
-          <li key={feature} className="flex gap-2">
-            <Check className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-            <span>{feature}</span>
-          </li>
-        ))}
+        {tier.features.map((feature) => {
+          const comingSoon = feature.includes("Coming soon");
+          return (
+            <li key={feature} className="flex gap-2">
+              {comingSoon ? (
+                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+              ) : (
+                <Check className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+              )}
+              <span className={comingSoon ? "italic text-slate-400" : undefined}>{feature}</span>
+            </li>
+          );
+        })}
       </ul>
 
       {tier.annualBonusEligible && (
@@ -138,8 +145,8 @@ export default function PricingPage() {
         or{" "}
         <Link href="/signup" className="font-medium text-slate-900 hover:underline">
           start your free trial
-        </Link>{" "}
-        — no credit card required.
+        </Link>
+        .
       </p>
     </div>
   );
